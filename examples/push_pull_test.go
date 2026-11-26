@@ -12,7 +12,7 @@ import (
 func TestPushPullConversion(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("MUST convert Receiver to iter.Seq2", func(t *testing.T) {
+	t.Run("MUST convert Receiver to iter.Seq2 completely", func(t *testing.T) {
 		ch := make(chan int, 3)
 		ch <- 10
 		ch <- 20
@@ -29,6 +29,28 @@ func TestPushPullConversion(t *testing.T) {
 		}
 
 		require.Equal(t, []int{10, 20, 30}, collected)
+	})
+
+	t.Run("MUST halt push loop gracefully on iterator break without error", func(t *testing.T) {
+		ch := make(chan int, 5)
+		for i := 1; i <= 5; i++ {
+			ch <- i
+		}
+		close(ch)
+
+		stream := streaming.NewChanStream(ch, nil)
+		seq := ToSeq2[int](ctx, stream)
+
+		var collected []int
+		for val, err := range seq {
+			require.NoError(t, err)
+			collected = append(collected, val)
+			if val == 3 {
+				break
+			}
+		}
+
+		require.Equal(t, []int{1, 2, 3}, collected)
 	})
 
 	t.Run("MUST convert iter.Seq2 to Sender", func(t *testing.T) {

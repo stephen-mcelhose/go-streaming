@@ -57,7 +57,7 @@ func Zip[A any, B any, O any](
 				return nil
 			}
 		})
-		if !isCleanCompletion(err) && !errors.Is(err, context.Canceled) {
+		if !streaming.IsCleanTermination(err) && !errors.Is(err, context.Canceled) {
 			select {
 			case errCh <- err:
 				cancel()
@@ -76,7 +76,7 @@ func Zip[A any, B any, O any](
 				return nil
 			}
 		})
-		if !isCleanCompletion(err) && !errors.Is(err, context.Canceled) {
+		if !streaming.IsCleanTermination(err) && !errors.Is(err, context.Canceled) {
 			select {
 			case errCh <- err:
 				cancel()

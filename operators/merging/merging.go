@@ -3,20 +3,14 @@ package merging
 import (
 	"context"
 	"errors"
-	"io"
 	"sync"
 
 	"github.com/stephen-mcelhose/go-streaming"
 )
 
-// isCleanCompletion returns true if err indicates normal stream completion (nil or io.EOF).
-func isCleanCompletion(err error) bool {
-	return err == nil || errors.Is(err, io.EOF)
-}
-
 // Merge combines multiple Receiver[T] inputs concurrently into a single Sender[T].
-// Individual receivers completing normally or with io.EOF do not cancel other receivers.
-// If any receiver returns a non-EOF error, Merge cancels remaining receivers and aborts with that error.
+// Individual receivers completing cleanly (nil, io.EOF, or ErrStreamStop) do not cancel other receivers.
+// If any receiver returns an unexpected error, Merge cancels remaining receivers and aborts with that error.
 func Merge[T any](
 	ctx context.Context,
 	sender streaming.Sender[T],
@@ -38,7 +32,7 @@ func Merge[T any](
 			err := rx.Receive(ctx, func(ctx context.Context, item T) error {
 				return sender.Send(ctx, item)
 			})
-			if !isCleanCompletion(err) && !errors.Is(err, context.Canceled) {
+			if !streaming.IsCleanTermination(err) && !errors.Is(err, context.Canceled) {
 				select {
 				case errCh <- err:
 					cancel()
@@ -68,7 +62,7 @@ func Concat[T any](
 		err := r.Receive(ctx, func(ctx context.Context, item T) error {
 			return sender.Send(ctx, item)
 		})
-		if !isCleanCompletion(err) {
+		if !streaming.IsCleanTermination(err) {
 			return err
 		}
 	}
@@ -114,7 +108,7 @@ func Interleave[T any](
 					return nil
 				}
 			})
-			if !isCleanCompletion(err) && !errors.Is(err, context.Canceled) {
+			if !streaming.IsCleanTermination(err) && !errors.Is(err, context.Canceled) {
 				q.err = err
 				cancel()
 			}
