@@ -1,4 +1,4 @@
-package math_test
+package pure_test
 
 import (
 	"context"
@@ -6,11 +6,11 @@ import (
 	"math"
 
 	"github.com/stephen-mcelhose/go-streaming"
-	mathops "github.com/stephen-mcelhose/go-streaming/operators/math"
+	"github.com/stephen-mcelhose/go-streaming/operators/pure"
 )
 
-// Point2D represents a Cartesian coordinate.
-type Point2D struct {
+// Coordinate represents a 2D Cartesian point.
+type Coordinate struct {
 	X float64
 	Y float64
 }
@@ -19,18 +19,18 @@ type Point2D struct {
 func ExampleMap() {
 	ctx := context.Background()
 
-	points := make(chan Point2D, 3)
-	points <- Point2D{X: 3, Y: 4}
-	points <- Point2D{X: 5, Y: 12}
-	points <- Point2D{X: 8, Y: 15}
+	points := make(chan Coordinate, 3)
+	points <- Coordinate{X: 3, Y: 4}
+	points <- Coordinate{X: 5, Y: 12}
+	points <- Coordinate{X: 8, Y: 15}
 	close(points)
 
 	distances := make(chan float64, 3)
 
 	go func() {
 		defer close(distances)
-		// Clean mathematical expression without error-handling clutter
-		mathops.Map(ctx, func(p Point2D) float64 {
+		// Clean mathematical expression without error boilerplate in user callback
+		_ = pure.Map(ctx, func(p Coordinate) float64 {
 			return math.Sqrt(p.X*p.X + p.Y*p.Y)
 		}, streaming.NewChanStream(points, nil), streaming.NewChanStream(nil, distances))
 	}()
@@ -45,7 +45,7 @@ func ExampleMap() {
 	// Distance: 17.0
 }
 
-// ExampleScan demonstrates calculating running statistical sum across numerical observations.
+// ExampleScan demonstrates calculating running statistical sum across pure numerical observation streams.
 func ExampleScan() {
 	ctx := context.Background()
 
@@ -59,7 +59,7 @@ func ExampleScan() {
 
 	go func() {
 		defer close(runningTotals)
-		mathops.Scan(ctx, 0.0, func(runningTotal, val float64) float64 {
+		_ = pure.Scan(ctx, 0.0, func(runningTotal, val float64) float64 {
 			return runningTotal + val
 		}, streaming.NewChanStream(observations, nil), streaming.NewChanStream(nil, runningTotals))
 	}()
