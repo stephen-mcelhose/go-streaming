@@ -1,4 +1,4 @@
-package mathops_test
+package math_test
 
 import (
 	"math"
@@ -13,7 +13,7 @@ func TestWelford(t *testing.T) {
 	type testCase struct {
 		name              string
 		samples           []float64
-		wantCount         int
+		wantCount         int64
 		wantMean          float64
 		wantVarianceNear  float64
 		wantStdDevNear    float64

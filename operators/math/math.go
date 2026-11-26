@@ -2,7 +2,6 @@ package math
 
 import (
 	"context"
-	"math"
 
 	"github.com/stephen-mcelhose/go-streaming"
 	"github.com/stephen-mcelhose/go-streaming/operators/pure"
@@ -44,58 +43,29 @@ type StatsSnapshot struct {
 	StdDev   float64
 }
 
-type welfordState struct {
-	count int64
-	sum   float64
-	min   float64
-	max   float64
-	mean  float64
-	m2    float64
-}
-
 // Stats accumulates an ordered bounded stream into descriptive summary statistics (Min, Max, Mean, Variance, StdDev).
 // Implemented via Welford's algorithm for numerical stability.
 func Stats[T OrderedNumber](ctx context.Context, in streaming.Receiver[T], out streaming.Sender[StatsSnapshot]) error {
-	initial := welfordState{min: math.MaxFloat64, max: -math.MaxFloat64}
+	w := NewWelford()
 
-	return pure.Reduce(ctx, initial, func(s welfordState, val T) welfordState {
-		fVal := float64(val)
-		s.count++
-		s.sum += fVal
-		if fVal < s.min {
-			s.min = fVal
-		}
-		if fVal > s.max {
-			s.max = fVal
-		}
-		delta := fVal - s.mean
-		s.mean += delta / float64(s.count)
-		delta2 := fVal - s.mean
-		s.m2 += delta * delta2
-		return s
-	}, in, &statsConverter{out: out})
+	err := in.Receive(ctx, func(ctx context.Context, val T) error {
+		w.Update(float64(val))
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	return out.Send(ctx, w.Snapshot())
 }
 
-type statsConverter struct {
-	out streaming.Sender[StatsSnapshot]
-}
+// RunningStats continuously calculates and emits updated summary statistics for each incoming element.
+func RunningStats[T OrderedNumber](ctx context.Context, in streaming.Receiver[T], out streaming.Sender[StatsSnapshot]) error {
+	w := NewWelford()
 
-func (sc *statsConverter) Send(ctx context.Context, s welfordState) error {
-	if s.count == 0 {
-		return sc.out.Send(ctx, StatsSnapshot{})
-	}
-	variance := 0.0
-	if s.count > 1 {
-		variance = s.m2 / float64(s.count-1)
-	}
-	return sc.out.Send(ctx, StatsSnapshot{
-		Count:    s.count,
-		Sum:      s.sum,
-		Min:      s.min,
-		Max:      s.max,
-		Mean:     s.mean,
-		Variance: variance,
-		StdDev:   math.Sqrt(variance),
+	return in.Receive(ctx, func(ctx context.Context, val T) error {
+		w.Update(float64(val))
+		return out.Send(ctx, w.Snapshot())
 	})
 }
 

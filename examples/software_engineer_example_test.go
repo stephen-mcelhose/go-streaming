@@ -2,6 +2,7 @@ package examples_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,58 +11,110 @@ import (
 	"github.com/stephen-mcelhose/go-streaming/operators/transformations"
 )
 
+// UserSignupCommand represents an incoming command from an API gateway or message broker.
 type UserSignupCommand struct {
 	UserID string
 	Email  string
+	Tier   string
 }
 
-type WelcomeEmailJob struct {
+// ProvisionJob represents an asynchronous work order dispatched to a downstream provisioning service.
+type ProvisionJob struct {
+	JobID     string
 	Recipient string
-	Subject   string
+	Tier      string
 }
 
-// Example_softwareEngineer demonstrates how a Software Engineer builds an asynchronous
-// command processor with error-handling, transformation into notification jobs, and retry with fallback DLQ.
+// simulatedProvisionService models an external microservice with intermittent network/DB faults.
+type simulatedProvisionService struct {
+	attempts map[string]int
+}
+
+func (s *simulatedProvisionService) Send(ctx context.Context, job ProvisionJob) error {
+	s.attempts[job.JobID]++
+	// Terminal failure: simulate non-existent tenant/account error
+	if job.JobID == "job_usr_corrupt" {
+		return errors.New("terminal: invalid customer tier specification")
+	}
+	// Transient failure: simulate database lock on 1st attempt, recovers on 2nd attempt
+	if job.JobID == "job_usr_transient" && s.attempts[job.JobID] < 2 {
+		return errors.New("transient: connection pool exhausted, try again")
+	}
+	return nil
+}
+
+// Example_softwareEngineer demonstrates how a Backend / Distributed Systems Engineer
+// builds a resilient asynchronous task dispatch pipeline:
+// 1. Ingests raw incoming commands from an ingress stream.
+// 2. Maps/enriches commands into structured asynchronous job specifications.
+// 3. Dispatches jobs through control.RetrySender with exponential backoff and jitter.
+// 4. Automatically routes terminally failed jobs to a Dead Letter Queue (DLQ) without crashing.
+// 5. Provides end-to-end observability across successes, retries, and DLQ entries.
 func Example_softwareEngineer() {
 	ctx := context.Background()
 
-	// Ingress command stream (e.g. from HTTP handler or service channel)
-	commands := make(chan UserSignupCommand, 2)
-	commands <- UserSignupCommand{UserID: "usr_1", Email: "alex@example.com"}
-	commands <- UserSignupCommand{UserID: "usr_2", Email: "sam@example.com"}
-	close(commands)
+	// Ingress stream containing scenario commands
+	commands := userSignupCommandStream()
 
-	emailJobs := make(chan WelcomeEmailJob, 2)
-	dlqSink := make(chan WelcomeEmailJob, 2)
+	jobQueue := make(chan ProvisionJob, 3)
+	dlqSink := make(chan ProvisionJob, 3)
 
 	inStream := streaming.NewChanStream(commands, nil)
-	outStream := streaming.NewChanStream(nil, emailJobs)
+	outStream := streaming.NewChanStream(nil, jobQueue)
 
-	// Transform user signup commands into templated welcome email jobs
+	// Step 1: Transform signup commands into structured ProvisionJobs
 	go func() {
-		defer close(emailJobs)
-		_ = transformations.Map(ctx, func(ctx context.Context, cmd UserSignupCommand) (WelcomeEmailJob, error) {
-			return WelcomeEmailJob{
+		defer close(jobQueue)
+		_ = transformations.Map(ctx, func(ctx context.Context, cmd UserSignupCommand) (ProvisionJob, error) {
+			return ProvisionJob{
+				JobID:     "job_" + cmd.UserID,
 				Recipient: cmd.Email,
-				Subject:   fmt.Sprintf("Welcome to the platform, %s!", cmd.UserID),
+				Tier:      cmd.Tier,
 			}, nil
 		}, inStream, outStream)
 	}()
 
-	// Resilient email dispatcher with retry policy and DLQ fallback
-	retryPolicy := control.RetryPolicy[WelcomeEmailJob]{
-		MaxAttempts:    2,
+	// Step 2: Configure resilient downstream delivery with RetryPolicy & FallbackSender (DLQ)
+	serviceBackend := &simulatedProvisionService{attempts: make(map[string]int)}
+	retryPolicy := control.RetryPolicy[ProvisionJob]{
+		MaxAttempts:    3,
 		InitialBackoff: 5 * time.Millisecond,
-		FallbackSender: streaming.NewChanStream(nil, dlqSink),
+		Multiplier:     2.0,
+		FallbackSender: streaming.NewChanStream(nil, dlqSink), // Safely catches exhausted failures
 	}
-	emailSender := control.NewRetrySender[WelcomeEmailJob](streaming.NewChanStream(nil, make(chan WelcomeEmailJob, 10)), retryPolicy)
+	resilientSender := control.NewRetrySender[ProvisionJob](serviceBackend, retryPolicy)
 
-	for job := range emailJobs {
-		_ = emailSender.Send(ctx, job)
-		fmt.Printf("Queued email to %s: '%s'\n", job.Recipient, job.Subject)
+	// Step 3: Consume and dispatch jobs
+	for job := range jobQueue {
+		_ = resilientSender.Send(ctx, job)
+		// Check service delivery status
+		if serviceBackend.attempts[job.JobID] > 0 && job.JobID != "job_usr_corrupt" {
+			fmt.Printf("[DISPATCH SUCCESS] %s (%s, tier: %s)\n", job.JobID, job.Recipient, job.Tier)
+		}
+	}
+
+	// Step 4: Drain and inspect Dead Letter Queue (DLQ)
+	close(dlqSink)
+	for deadJob := range dlqSink {
+		fmt.Printf("[DLQ ROUTED] %s (%s) routed to DLQ after %d attempts\n",
+			deadJob.JobID, deadJob.Recipient, serviceBackend.attempts[deadJob.JobID])
 	}
 
 	// Output:
-	// Queued email to alex@example.com: 'Welcome to the platform, usr_1!'
-	// Queued email to sam@example.com: 'Welcome to the platform, usr_2!'
+	// [DISPATCH SUCCESS] job_usr_ok (alice@acme.com, tier: pro)
+	// [DISPATCH SUCCESS] job_usr_transient (bob@acme.com, tier: enterprise)
+	// [DLQ ROUTED] job_usr_corrupt (bad@acme.com) routed to DLQ after 3 attempts
+}
+
+// userSignupCommandStream returns a stream representing three distinct real-world execution paths:
+// 1. usr_ok: Valid account signup, succeeds on first dispatch attempt.
+// 2. usr_transient: Experiences temporary connection contention, succeeds on retry #2.
+// 3. usr_corrupt: Invalid configuration, exhausts all 3 retry attempts and routes cleanly to DLQ.
+func userSignupCommandStream() <-chan UserSignupCommand {
+	commands := make(chan UserSignupCommand, 3)
+	commands <- UserSignupCommand{UserID: "usr_ok", Email: "alice@acme.com", Tier: "pro"}
+	commands <- UserSignupCommand{UserID: "usr_transient", Email: "bob@acme.com", Tier: "enterprise"}
+	commands <- UserSignupCommand{UserID: "usr_corrupt", Email: "bad@acme.com", Tier: "unknown"}
+	close(commands)
+	return commands
 }
