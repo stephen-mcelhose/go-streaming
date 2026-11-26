@@ -176,3 +176,15 @@ func TestChanStream_Send(t *testing.T) {
 		})
 	}
 }
+
+func TestChanStreamCloser(t *testing.T) {
+	ch := make(chan int, 2)
+	stream := streaming.NewChanStreamCloser(nil, ch)
+
+	err := stream.Close()
+	require.NoError(t, err)
+
+	// Channel must now be closed
+	_, ok := <-ch
+	require.False(t, ok)
+}

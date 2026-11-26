@@ -58,6 +58,13 @@ func (s *EOFReceiver[T]) Receive(ctx context.Context, handler func(ctx context.C
 }
 
 // ChanStream adapts Go channels into a Stream[T].
+//
+// Lifecycle & Channel Ownership:
+// Following standard Go channel idioms, the creator/sender owns channel lifecycle:
+//   - Ingest receiver channel (`<-chan T`) is closed by its producer to signal end-of-stream.
+//   - Egress sender channel (`chan<- T`) lifecycle is owned by the creator. Sending to a closed
+//     channel panics in Go; callers should ensure the destination channel remains open for the lifetime
+//     of the sender pipeline or use ChanStreamCloser when ownership is transferred.
 type ChanStream[T any] struct {
 	receiver <-chan T
 	sender   chan<- T
@@ -104,4 +111,27 @@ func (s *ChanStream[T]) Send(ctx context.Context, item T) error {
 	case s.sender <- item:
 		return nil
 	}
+}
+
+// ChanStreamCloser extends ChanStream with io.Closer to close the sender channel.
+type ChanStreamCloser[T any] struct {
+	*ChanStream[T]
+	closeSender chan<- T
+}
+
+// NewChanStreamCloser creates a ChanStreamCloser that closes the sender channel upon Close().
+func NewChanStreamCloser[T any](receiver <-chan T, sender chan<- T) *ChanStreamCloser[T] {
+	return &ChanStreamCloser[T]{
+		ChanStream:  NewChanStream(receiver, sender),
+		closeSender: sender,
+	}
+}
+
+// Close closes the underlying sender channel if present.
+func (s *ChanStreamCloser[T]) Close() error {
+	if s.closeSender != nil {
+		close(s.closeSender)
+		s.closeSender = nil
+	}
+	return nil
 }
