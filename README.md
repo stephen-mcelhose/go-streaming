@@ -18,9 +18,9 @@ A modular, composable, typed stream-processing library for Go built on simple, c
   - **Aggregations**: `Buffer` (count), `Batch` (hybrid count+time), `TumblingWindow` (time)
   - **Merging**: `Merge` (concurrent fan-in), `Concat` (sequential), `Interleave` (fair round-robin), `Zip`, `MergeSort` (heap)
   - **Routing**: `Broadcast` (fail-fast), `BroadcastBestEffort`, `RoundRobin`, `Partition` (with default/DLQ fallback)
-  - **Control**: `Throttle`, `Debounce`, `RetrySender` (with backoff & DLQ fallback)
+  - **Control**: `Throttle`, `Debounce`, `RetrySender` (with backoff & DLQ fallback), `CUSUM` (change-point detection)
   - **Pure Functional**: `pure` (Map, Filter, Reduce, Scan without error tuples)
-  - **Math & Statistics**: `math` (Sum, RunningSum, Welford Stats, EMA supporting Real & Complex numbers)
+  - **Math & Statistics**: `math` (`Welford`, `BivariateWelford`, `Covariance`, `PearsonCorrelation`, `Moments` with Skewness & Kurtosis, `Sum`, `RunningSum`, `Stats`, `EMA` supporting Real & Complex numbers)
 - **Production-Ready Adapters**: Google Cloud Pub/Sub, JSON Lines (`io.Reader`/`io.Writer`), Cloud Object Storage (S3/GCS), HTTP Server-Sent Events (SSE), gRPC streams, Go channels, and message brokers.
 
 ---
@@ -59,101 +59,6 @@ Optional lifecycle closers (`ReceiverCloser[T]`, `SenderCloser[T]`, `StreamClose
 
 ---
 
-## Persona Cookbook: How to Use `go-streaming`
-
-### 1. For Software Engineers: Resilient Async Task Dispatcher with DLQ
-```go
-// Ingest signup commands, map to work orders, and dispatch with exponential retry + Dead Letter Queue
-_ = transformations.Map(ctx, func(ctx context.Context, cmd UserSignupCommand) (ProvisionJob, error) {
-    return ProvisionJob{JobID: "job_" + cmd.UserID, Recipient: cmd.Email, Tier: cmd.Tier}, nil
-}, inStream, outStream)
-
-retryPolicy := control.RetryPolicy[ProvisionJob]{
-    MaxAttempts:    3,
-    InitialBackoff: 5 * time.Millisecond,
-    Multiplier:     2.0,
-    FallbackSender: streaming.NewChanStream(nil, dlqSink), // Automatic fallback to Dead Letter Queue
-}
-resilientSender := control.NewRetrySender[ProvisionJob](serviceBackend, retryPolicy)
-```
-
-### 2. For Data Engineers: Lakehouse ETL Micro-Batching & Multi-Partition Sorted Backfills
-```go
-// Ingest JSONL stream, clean URLs into normalized paths, and shard by tenant
-_ = routing.Partition(ctx,
-    func(ev CleanClickEvent) (string, error) { return ev.TenantID, nil },
-    routes, dlqSink, cleanedStream,
-)
-
-// Micro-batch tenant records (by count or timeout) for high-throughput cloud storage writes
-_ = aggregation.Batch(ctx, aggregation.BatchConfig{
-    MaxSize: 500,
-    MaxWait: 100 * time.Millisecond,
-}, tenantStream, batchedSink)
-
-// Globally merge pre-sorted historical partition streams via min-heap
-_ = merging.MergeSort(ctx,
-    func(a, b CleanClickEvent) int { return int(a.Timestamp - b.Timestamp) },
-    sortedSink, partition1, partition2,
-)
-```
-
-### 3. For Network Engineers: Traffic Demuxing, Telemetry Fan-Out, and Alert Flood Throttling
-```go
-// Partition captured packets by transport protocol
-_ = routing.Partition(ctx,
-    func(p NetworkPacket) (string, error) { return p.Protocol, nil },
-    map[string]streaming.Sender[NetworkPacket]{"TCP": tcpSink, "UDP": udpSink},
-    nil, rawPacketStream,
-)
-
-// Non-blocking fire-and-forget replication to SIEM analytics and real-time IDS
-_ = routing.BroadcastBestEffort(ctx, alertStream, siemSink, idsSink)
-
-// Throttle burst alerts to prevent incident responder pager fatigue during DDoS storms
-_ = control.Throttle(ctx, 100*time.Millisecond, burstAlertsStream, pagerSink)
-```
-
-### 4. For Mathematicians & DSP Engineers: Complex Signal Demodulation & Energy Integration
-```go
-// Demodulate complex IQ baseband samples (complex128) into polar amplitude & phase without error boilerplate
-_ = pure.Map(ctx, func(z complex128) RawPolar {
-    return RawPolar{Magnitude: cmplx.Abs(z), Phase: cmplx.Phase(z), Power: cmplx.Abs(z) * cmplx.Abs(z)}
-}, iqStream, polarStream)
-
-// Instantaneous FM/PM frequency discrimination (Delta Phase) via stateful pure.Scan
-_ = pure.Scan(ctx, phaseState{}, func(st phaseState, raw RawPolar) phaseState {
-    delta := raw.Phase - st.prevPhase // with phase unwrap correction
-    st.prevPhase = raw.Phase
-    st.deltaPhase = delta
-    return st
-}, polarStream, discriminatedStream)
-
-// Total integrated pulse energy accumulation
-_ = mathops.Sum(ctx, powerStream, totalEnergySink)
-```
-
-### 5. For Data Scientists: Real-Time Single-Pass Feature Engineering & Anomaly Detection
-```go
-// Single-pass running moments (Welford's Algorithm) + Exponential Moving Average (EMA)
-_ = pure.Scan(ctx, onlineStatsState{alpha: 0.3}, func(acc onlineStatsState, tick MetricTick) onlineStatsState {
-    // Online EMA update: EMA_t = alpha * X_t + (1 - alpha) * EMA_{t-1}
-    acc.ema = acc.alpha*tick.Value + (1.0-acc.alpha)*acc.ema
-    
-    // Online Welford update: Mean and M2 (Variance)
-    delta := tick.Value - acc.mean
-    acc.mean += delta / float64(acc.count)
-    acc.m2 += delta * (tick.Value - acc.mean)
-    
-    // Dynamic real-time Z-score anomaly scoring
-    zScore := (tick.Value - priorMean) / priorStdDev
-    acc.isAnomaly = zScore > 2.5
-    return acc
-}, rawTicksStream, scoredFeatureStream)
-```
-
----
-
 ## Operator Matrix
 
 | Category | Operator | Description |
@@ -178,8 +83,13 @@ _ = pure.Scan(ctx, onlineStatsState{alpha: 0.3}, func(acc onlineStatsState, tick
 | **Control** | `Throttle[T]` | Limits stream throughput to 1 item per duration. |
 | | `Debounce[T]` | Emits item only after quiet duration passes. |
 | | `RetrySender[T]` | Retries failed sends with backoff and optional DLQ fallback. |
+| | `CUSUM[T]` | Page's Cumulative Sum control chart for early detection of mean shifts. |
 | **Pure** | `Map`, `Filter`, `Reduce`, `Scan` | Pure functional wrappers accepting `func(I) O` without error clutter. |
-| **Math** | `Sum`, `RunningSum`, `Stats`, `EMA` | Dedicated numeric/statistical stream processing (Real & Complex). |
+| **Math & Moments** | `Sum`, `RunningSum` | Total and cumulative summations (Real & Complex). |
+| | `Stats`, `RunningStats` | Single-pass Welford summary moments (Mean, Variance, StdDev, Min, Max). |
+| | `Covariance`, `PearsonCorrelation` | Online bivariate Welford covariance and correlation ($r \in [-1, 1]$). |
+| | `MomentsStats`, `RunningMoments` | Higher-order shape statistics (Skewness and Kurtosis via Pébay recurrence). |
+| | `EMA` | Exponential Moving Average with configurable smoothing weight $\alpha$. |
 
 ---
 
