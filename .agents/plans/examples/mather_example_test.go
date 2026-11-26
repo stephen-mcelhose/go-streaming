@@ -11,66 +11,122 @@ import (
 	"github.com/stephen-mcelhose/go-streaming/operators/pure"
 )
 
-// Example_matherWorkflow demonstrates how a Mathematician / DSP Engineer
-// performs complex digital signal processing (DSP) workflows cleanly:
-// 1. Streams complex IQ radio samples (complex128).
-// 2. Maps pure polar conversion (magnitude & phase) without error boilerplate.
-// 3. Filters signals above power thresholds.
-// 4. Computes total complex vector summation and running energy integrals.
-func Example_matherWorkflow() {
+// PolarSample represents a demodulated complex baseband IQ sample in polar coordinates.
+type PolarSample struct {
+	Index        int
+	Magnitude    float64 // Envelope amplitude |z|
+	PhaseRad     float64 // Phase angle in radians [-pi, pi]
+	InstPower    float64 // Instantaneous power |z|^2
+	DeltaPhaseHz float64 // Discrete frequency discriminator: Delta theta
+}
+
+// phaseDiscriminatorState tracks prior sample phase for frequency demodulation.
+type phaseDiscriminatorState struct {
+	prevPhase float64
+	hasPrev   bool
+	sample    PolarSample
+}
+
+// Example_mather demonstrates how a Mathematician / DSP (Digital Signal Processing) Engineer
+// processes complex baseband RF/audio IQ streams (complex128):
+// 1. Ingests raw baseband In-phase / Quadrature (IQ) analytic signal samples: z[n] = I[n] + jQ[n].
+// 2. Applies pure.Map without error-tuple overhead to compute polar magnitude & instantaneous power.
+// 3. Implements single-pass FM/PM phase discrimination via pure.Scan to extract instantaneous frequency shifts.
+// 4. Computes total integrated signal energy across the RF burst using mathops.Sum.
+func Example_mather() {
 	ctx := context.Background()
 
-	// Ingress stream of complex IQ signal samples: z = I + jQ
-	iqSamples := make(chan complex128, 4)
-	iqSamples <- 3.0 + 4.0i  // magnitude = 5.0
-	iqSamples <- 1.0 + 1.0i  // magnitude = 1.414
-	iqSamples <- 0.0 + 2.0i  // magnitude = 2.0
-	iqSamples <- 5.0 + 12.0i // magnitude = 13.0
-	close(iqSamples)
+	// Ingress stream of complex baseband IQ samples representing a frequency-modulated pulse
+	// Sample 0: Carrier base (1.0 + 0.0i) -> phase 0
+	// Sample 1: Chirp up (0.0 + 2.0i)     -> phase +pi/2 (+1.57 rad)
+	// Sample 2: Chirp up (-3.0 + 0.0i)    -> phase +pi (+3.14 rad)
+	// Sample 3: High power burst (3.0 + 4.0i) -> magnitude 5.0, phase +0.93 rad
+	iqCh := make(chan complex128, 4)
+	samples := []complex128{
+		1.0 + 0.0i,
+		0.0 + 2.0i,
+		-3.0 + 0.0i,
+		3.0 + 4.0i,
+	}
+	for _, s := range samples {
+		iqCh <- s
+	}
+	close(iqCh)
 
-	// Step 1: Pure mathematical transformation: compute signal magnitude and phase
-	type PolarSample struct {
+	// Step 1: Demodulate IQ samples into Polar Coordinates (Magnitude, Phase, Instantaneous Power)
+	type RawPolar struct {
+		Index     int
 		Magnitude float64
-		PhaseRad  float64
+		Phase     float64
+		Power     float64
 	}
 
-	polarCh := make(chan PolarSample, 4)
-	_ = pure.Map(ctx, func(z complex128) PolarSample {
-		mag, phase := cmplx.Abs(z), cmplx.Phase(z)
-		return PolarSample{Magnitude: mag, PhaseRad: phase}
-	}, streaming.NewChanStream(iqSamples, nil), streaming.NewChanStream(nil, polarCh))
+	polarCh := make(chan RawPolar, 4)
+	var sampleIdx int
+	_ = pure.Map(ctx, func(z complex128) RawPolar {
+		mag := cmplx.Abs(z)
+		phase := cmplx.Phase(z)
+		power := mag * mag
+		out := RawPolar{Index: sampleIdx, Magnitude: mag, Phase: phase, Power: power}
+		sampleIdx++
+		return out
+	}, streaming.NewChanStream(iqCh, nil), streaming.NewChanStream(nil, polarCh))
 	close(polarCh)
 
-	// Step 2: Filter high-power signals (> 3.0 magnitude)
-	highPowerCh := make(chan PolarSample, 4)
-	_ = pure.Filter(ctx, func(p PolarSample) bool {
-		return p.Magnitude >= 3.0
-	}, streaming.NewChanStream(polarCh, nil), streaming.NewChanStream(nil, highPowerCh))
-	close(highPowerCh)
+	// Step 2: Instantaneous Frequency Demodulation via pure.Scan
+	// Frequency discriminator: Delta theta = unwrap(theta[n] - theta[n-1])
+	discriminatedCh := make(chan phaseDiscriminatorState, 4)
+	_ = pure.Scan(ctx, phaseDiscriminatorState{}, func(st phaseDiscriminatorState, raw RawPolar) phaseDiscriminatorState {
+		var deltaPhase float64
+		if st.hasPrev {
+			delta := raw.Phase - st.prevPhase
+			// Phase wrap correction to [-pi, pi]
+			for delta > math.Pi {
+				delta -= 2 * math.Pi
+			}
+			for delta < -math.Pi {
+				delta += 2 * math.Pi
+			}
+			deltaPhase = delta
+		}
 
-	fmt.Println("High Power Signals:")
-	for s := range highPowerCh {
-		fmt.Printf("Mag=%.1f, Phase=%.2f rad\n", s.Magnitude, s.PhaseRad)
+		st.hasPrev = true
+		st.prevPhase = raw.Phase
+		st.sample = PolarSample{
+			Index:        raw.Index,
+			Magnitude:    raw.Magnitude,
+			PhaseRad:     raw.Phase,
+			InstPower:    raw.Power,
+			DeltaPhaseHz: deltaPhase,
+		}
+		return st
+	}, streaming.NewChanStream(polarCh, nil), streaming.NewChanStream(nil, discriminatedCh))
+	close(discriminatedCh)
+
+	// Step 3: Stream consumption & Demodulated Telemetry Output
+	powerValues := make(chan float64, 4)
+	fmt.Println("Demodulated Baseband Stream:")
+	for state := range discriminatedCh {
+		s := state.sample
+		powerValues <- s.InstPower
+		fmt.Printf("Sample %d: |z|=%.2f, Phase=%.2f rad, Power=%.1f, DeltaPhase=%.2f rad/sample\n",
+			s.Index, s.Magnitude, s.PhaseRad, s.InstPower, s.DeltaPhaseHz)
 	}
+	close(powerValues)
 
-	// Step 3: Exact vector summation over complex stream
-	vectors := make(chan complex128, 3)
-	vectors <- 1.0 + 2.0i
-	vectors <- 2.0 + 1.0i
-	vectors <- 3.0 + 3.0i
-	close(vectors)
+	// Step 4: Total Integrated RF Pulse Energy Calculation via mathops.Sum
+	totalEnergySink := make(chan float64, 1)
+	_ = mathops.Sum(ctx, streaming.NewChanStream(powerValues, nil), streaming.NewChanStream(nil, totalEnergySink))
+	close(totalEnergySink)
 
-	sumSink := make(chan complex128, 1)
-	_ = mathops.Sum(ctx, streaming.NewChanStream(vectors, nil), streaming.NewChanStream(nil, sumSink))
-	close(sumSink)
-
-	totalVector := <-sumSink
-	fmt.Printf("Total Vector Sum: %.1f + %.1fi (Magnitude: %.2f)\n",
-		real(totalVector), imag(totalVector), math.Hypot(real(totalVector), imag(totalVector)))
+	totalEnergy := <-totalEnergySink
+	fmt.Printf("Total Integrated Pulse Energy: %.1f Joules (normalized)\n", totalEnergy)
 
 	// Output:
-	// High Power Signals:
-	// Mag=5.0, Phase=0.93 rad
-	// Mag=13.0, Phase=1.18 rad
-	// Total Vector Sum: 6.0 + 6.0i (Magnitude: 8.49)
+	// Demodulated Baseband Stream:
+	// Sample 0: |z|=1.00, Phase=0.00 rad, Power=1.0, DeltaPhase=0.00 rad/sample
+	// Sample 1: |z|=2.00, Phase=1.57 rad, Power=4.0, DeltaPhase=1.57 rad/sample
+	// Sample 2: |z|=3.00, Phase=3.14 rad, Power=9.0, DeltaPhase=1.57 rad/sample
+	// Sample 3: |z|=5.00, Phase=0.93 rad, Power=25.0, DeltaPhase=-2.21 rad/sample
+	// Total Integrated Pulse Energy: 39.0 Joules (normalized)
 }

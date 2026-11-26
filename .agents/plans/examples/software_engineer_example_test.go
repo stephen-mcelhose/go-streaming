@@ -11,104 +11,103 @@ import (
 	"github.com/stephen-mcelhose/go-streaming/operators/transformations"
 )
 
-// UserSignupEvent represents an incoming event from an API or webhook.
-type UserSignupEvent struct {
-	UserID    string
-	Email     string
-	Plan      string
-	Timestamp time.Time
+// UserSignupCommand represents an incoming command from an API gateway or message broker.
+type UserSignupCommand struct {
+	UserID string
+	Email  string
+	Tier   string
 }
 
-// ProvisionJob represents an asynchronous downstream work order.
+// ProvisionJob represents an asynchronous work order dispatched to a downstream provisioning service.
 type ProvisionJob struct {
 	JobID     string
-	TenantID  string
-	Email     string
+	Recipient string
 	Tier      string
-	CreatedAt time.Time
 }
 
-// mockRemoteProvisionService simulates an external provisioning microservice.
-type mockRemoteProvisionService struct {
+// simulatedProvisionService models an external microservice with intermittent network/DB faults.
+type simulatedProvisionService struct {
 	attempts map[string]int
 }
 
-func (s *mockRemoteProvisionService) Send(ctx context.Context, job ProvisionJob) error {
+func (s *simulatedProvisionService) Send(ctx context.Context, job ProvisionJob) error {
 	s.attempts[job.JobID]++
-	// Fail job "usr_fail" permanently to trigger DLQ
-	if job.TenantID == "usr_fail" {
-		return errors.New("provisioning API unreachable")
+	// Terminal failure: simulate non-existent tenant/account error
+	if job.JobID == "job_usr_corrupt" {
+		return errors.New("terminal: invalid customer tier specification")
 	}
-	// Fail job "usr_transient" once, then succeed on retry
-	if job.TenantID == "usr_transient" && s.attempts[job.JobID] < 2 {
-		return errors.New("transient database lock")
+	// Transient failure: simulate database lock on 1st attempt, recovers on 2nd attempt
+	if job.JobID == "job_usr_transient" && s.attempts[job.JobID] < 2 {
+		return errors.New("transient: connection pool exhausted, try again")
 	}
 	return nil
 }
 
-// Example_softwareEngineerWorkflow demonstrates how a Backend / Distributed Systems Engineer
-// constructs an end-to-end resilient worker pipeline:
-// 1. Ingests domain events from a receiver
-// 2. Maps/validates events into downstream provisioning jobs
-// 3. Delivers jobs via a RetrySender with exponential backoff
-// 4. Automatically forwards exhausted failures to a Dead Letter Queue (DLQ)
-func Example_softwareEngineerWorkflow() {
+// Example_softwareEngineer demonstrates how a Backend / Distributed Systems Engineer
+// builds a resilient asynchronous task dispatch pipeline:
+// 1. Ingests raw incoming commands from an ingress stream.
+// 2. Maps/enriches commands into structured asynchronous job specifications.
+// 3. Dispatches jobs through control.RetrySender with exponential backoff and jitter.
+// 4. Automatically routes terminally failed jobs to a Dead Letter Queue (DLQ) without crashing.
+// 5. Provides end-to-end observability across successes, retries, and DLQ entries.
+func Example_softwareEngineer() {
 	ctx := context.Background()
 
-	// Ingress stream of user signups
-	eventCh := make(chan UserSignupEvent, 3)
-	eventCh <- UserSignupEvent{UserID: "usr_ok", Email: "ok@corp.io", Plan: "pro", Timestamp: time.Now()}
-	eventCh <- UserSignupEvent{UserID: "usr_transient", Email: "retry@corp.io", Plan: "enterprise", Timestamp: time.Now()}
-	eventCh <- UserSignupEvent{UserID: "usr_fail", Email: "fail@corp.io", Plan: "free", Timestamp: time.Now()}
-	close(eventCh)
+	// Ingress stream containing 3 distinct scenario commands:
+	// - usr_ok: Standard valid command (succeeds first try)
+	// - usr_transient: Experiences a transient network glitch, succeeds on retry #2
+	// - usr_corrupt: Permanently fails, exhausts retries, routed to DLQ
+	commands := make(chan UserSignupCommand, 3)
+	commands <- UserSignupCommand{UserID: "usr_ok", Email: "alice@acme.com", Tier: "pro"}
+	commands <- UserSignupCommand{UserID: "usr_transient", Email: "bob@acme.com", Tier: "enterprise"}
+	commands <- UserSignupCommand{UserID: "usr_corrupt", Email: "bad@acme.com", Tier: "unknown"}
+	close(commands)
 
-	// Intermediates & Sinks
 	jobQueue := make(chan ProvisionJob, 3)
 	dlqSink := make(chan ProvisionJob, 3)
 
-	inStream := streaming.NewChanStream(eventCh, nil)
-	jobStream := streaming.NewChanStream(nil, jobQueue)
+	inStream := streaming.NewChanStream(commands, nil)
+	outStream := streaming.NewChanStream(nil, jobQueue)
 
-	// Step 1: Transform domain signup events into provisioning work orders
+	// Step 1: Transform signup commands into structured ProvisionJobs
 	go func() {
 		defer close(jobQueue)
-		_ = transformations.Map(ctx, func(ctx context.Context, ev UserSignupEvent) (ProvisionJob, error) {
+		_ = transformations.Map(ctx, func(ctx context.Context, cmd UserSignupCommand) (ProvisionJob, error) {
 			return ProvisionJob{
-				JobID:     "job_" + ev.UserID,
-				TenantID:  ev.UserID,
-				Email:     ev.Email,
-				Tier:      ev.Plan,
-				CreatedAt: ev.Timestamp,
+				JobID:     "job_" + cmd.UserID,
+				Recipient: cmd.Email,
+				Tier:      cmd.Tier,
 			}, nil
-		}, inStream, jobStream)
+		}, inStream, outStream)
 	}()
 
-	// Step 2: Configure resilient downstream delivery with RetryPolicy and DLQ Fallback
-	remoteService := &mockRemoteProvisionService{attempts: make(map[string]int)}
+	// Step 2: Configure resilient downstream delivery with RetryPolicy & FallbackSender (DLQ)
+	serviceBackend := &simulatedProvisionService{attempts: make(map[string]int)}
 	retryPolicy := control.RetryPolicy[ProvisionJob]{
 		MaxAttempts:    3,
 		InitialBackoff: 5 * time.Millisecond,
 		Multiplier:     2.0,
-		FallbackSender: streaming.NewChanStream(nil, dlqSink), // Routes to DLQ when 3 attempts fail
+		FallbackSender: streaming.NewChanStream(nil, dlqSink), // Safely catches exhausted failures
 	}
-	resilientSender := control.NewRetrySender[ProvisionJob](remoteService, retryPolicy)
+	resilientSender := control.NewRetrySender[ProvisionJob](serviceBackend, retryPolicy)
 
-	// Step 3: Consume jobs and dispatch
+	// Step 3: Consume and dispatch jobs
 	for job := range jobQueue {
 		err := resilientSender.Send(ctx, job)
 		if err == nil {
-			fmt.Printf("Job %s: Successfully provisioned for %s\n", job.JobID, job.Email)
+			fmt.Printf("[DISPATCH SUCCESS] %s (%s, tier: %s)\n", job.JobID, job.Recipient, job.Tier)
 		}
 	}
 
-	// Step 4: Inspect DLQ for exhausted failures
+	// Step 4: Drain and inspect Dead Letter Queue (DLQ)
 	close(dlqSink)
 	for deadJob := range dlqSink {
-		fmt.Printf("DLQ Alert: Job %s for %s routed to DLQ after retry exhaustion\n", deadJob.JobID, deadJob.Email)
+		fmt.Printf("[DLQ ROUTED] %s (%s) routed to DLQ after %d attempts\n",
+			deadJob.JobID, deadJob.Recipient, serviceBackend.attempts[deadJob.JobID])
 	}
 
 	// Output:
-	// Job job_usr_ok: Successfully provisioned for ok@corp.io
-	// Job job_usr_transient: Successfully provisioned for retry@corp.io
-	// DLQ Alert: Job job_usr_fail for fail@corp.io routed to DLQ after retry exhaustion
+	// [DISPATCH SUCCESS] job_usr_ok (alice@acme.com, tier: pro)
+	// [DISPATCH SUCCESS] job_usr_transient (bob@acme.com, tier: enterprise)
+	// [DLQ ROUTED] job_usr_corrupt (bad@acme.com) routed to DLQ after 3 attempts
 }

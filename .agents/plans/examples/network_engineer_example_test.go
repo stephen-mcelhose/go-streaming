@@ -10,7 +10,7 @@ import (
 	"github.com/stephen-mcelhose/go-streaming/operators/routing"
 )
 
-// NetworkPacket represents a captured packet on an interface.
+// NetworkPacket represents a captured packet from a network interface (e.g. AF_PACKET / eBPF).
 type NetworkPacket struct {
 	SrcIP    string
 	DstPort  int
@@ -24,13 +24,13 @@ type SecurityAlert struct {
 	Message string
 }
 
-// Example_networkEngineerWorkflow demonstrates how a Network / SecOps Engineer
-// implements high-throughput packet processing and incident handling:
-// 1. Ingests raw network packet captures.
-// 2. Partitions packets by protocol (TCP vs UDP) into dedicated processing pipelines.
-// 3. Replicates critical security telemetry to multiple sinks (SIEM and IDS) via BroadcastBestEffort.
-// 4. Rate-limits (Throttle) and debounces (Debounce) alert storms to prevent pager flooding during attacks.
-func Example_networkEngineerWorkflow() {
+// Example_networkEngineer demonstrates how a Network / SecOps Engineer
+// builds a high-throughput telemetry demuxing and alert squashing pipeline:
+// 1. Ingests raw network packet captures from network interfaces.
+// 2. Partitions packets by protocol (TCP vs UDP) into dedicated processing streams via routing.Partition.
+// 3. Replicates security telemetry to multiple sinks (SIEM archive and real-time IDS) via routing.BroadcastBestEffort.
+// 4. Rate-limits (control.Throttle) alert storms to prevent pager flooding during active attacks.
+func Example_networkEngineer() {
 	ctx := context.Background()
 
 	// Ingress raw packet stream
@@ -62,7 +62,7 @@ func Example_networkEngineerWorkflow() {
 
 	fmt.Printf("Demuxed: %d TCP packets, %d UDP packets\n", len(tcpSink), len(udpSink))
 
-	// Step 2: Multi-destination fan-out via BroadcastBestEffort (Non-blocking telemetry)
+	// Step 2: Multi-destination fan-out via BroadcastBestEffort (Non-blocking SIEM & IDS telemetry)
 	alertCh := make(chan SecurityAlert, 1)
 	alertCh <- SecurityAlert{Level: "CRITICAL", Message: "Port Scan Detected from 10.0.0.99"}
 	close(alertCh)
@@ -80,7 +80,7 @@ func Example_networkEngineerWorkflow() {
 	close(idsSink)
 	fmt.Printf("Telemetry replicated to SIEM (%d) and IDS (%d)\n", len(siemSink), len(idsSink))
 
-	// Step 3: Throttle burst alerts to prevent pager flood
+	// Step 3: Throttle burst alerts to prevent on-call pager flood
 	burstAlerts := make(chan SecurityAlert, 2)
 	burstAlerts <- SecurityAlert{Level: "CRITICAL", Message: "SYN Flood #1"}
 	burstAlerts <- SecurityAlert{Level: "CRITICAL", Message: "SYN Flood #2"}

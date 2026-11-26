@@ -15,7 +15,7 @@ import (
 	"github.com/stephen-mcelhose/go-streaming/operators/transformations"
 )
 
-// RawClickEvent represents raw unstructured clickstream events.
+// RawClickEvent represents raw unstructured clickstream events from Kafka/S3.
 type RawClickEvent struct {
 	TenantID  string `json:"tenant_id"`
 	SessionID string `json:"session_id"`
@@ -31,13 +31,13 @@ type CleanClickEvent struct {
 	Timestamp int64  `json:"ts"`
 }
 
-// Example_dataEngineerWorkflow demonstrates how a Data Engineer implements a real-world pipeline:
+// Example_dataEngineer demonstrates how a Data Engineer implements a real-world Lakehouse ingestion pipeline:
 // 1. Ingests raw JSONL events from an object store or stream source.
-// 2. Cleans URLs into standardized paths.
-// 3. Shards events by Tenant into tenant-specific processing queues.
-// 4. Micro-batches events (by count or timeout) for high-throughput batch writes.
-// 5. Merges multi-partition pre-sorted historical partition streams using MergeSort for consistent analytics.
-func Example_dataEngineerWorkflow() {
+// 2. Normalizes URLs into clean analytical paths via transformations.Map.
+// 3. Shards events by Tenant into dedicated partition queues via routing.Partition.
+// 4. Micro-batches events (by count or timeout) via aggregation.Batch for high-throughput batch writes.
+// 5. Merges multi-partition pre-sorted historical partition streams using merging.MergeSort for consistent backfill analytics.
+func Example_dataEngineer() {
 	ctx := context.Background()
 
 	// Ingress raw JSONL data stream (e.g. from GCS/S3 or Kafka connector)
@@ -107,7 +107,7 @@ func Example_dataEngineerWorkflow() {
 
 	fmt.Printf("Tenant A Staged Records:\n%s", stagingSink.String())
 
-	// Step 4: Multi-partition sorted merge (MergeSort)
+	// Step 4: Multi-partition sorted merge (MergeSort) for backfill ordering
 	p1 := make(chan CleanClickEvent, 2)
 	p1 <- CleanClickEvent{TenantID: "corp_a", SessionID: "s_1", Timestamp: 10}
 	p1 <- CleanClickEvent{TenantID: "corp_a", SessionID: "s_3", Timestamp: 30}
