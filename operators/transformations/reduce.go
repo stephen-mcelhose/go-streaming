@@ -6,19 +6,20 @@ import (
 	"github.com/stephen-mcelhose/go-streaming"
 )
 
-// Reduce aggregates items in stream using reducer function and sends the final accumulated result to out.
-func Reduce[T any](
+// Reduce aggregates elements of type I into a terminal state object of type O for bounded streams.
+// It consumes the entire stream until exhaustion, and emits the final accumulated state to out.
+func Reduce[I any, O any](
 	ctx context.Context,
-	initial T,
-	reducer func(ctx context.Context, acc T, item T) (T, error),
-	in streaming.Receiver[T],
-	out streaming.Sender[T],
+	initialState O,
+	reducer func(ctx context.Context, state O, item I) (O, error),
+	in streaming.Receiver[I],
+	out streaming.Sender[O],
 ) error {
-	acc := initial
+	state := initialState
 	hasItems := false
-	err := in.Receive(ctx, func(ctx context.Context, item T) error {
+	err := in.Receive(ctx, func(ctx context.Context, item I) error {
 		var rErr error
-		acc, rErr = reducer(ctx, acc, item)
+		state, rErr = reducer(ctx, state, item)
 		if rErr != nil {
 			return rErr
 		}
@@ -29,7 +30,27 @@ func Reduce[T any](
 		return err
 	}
 	if hasItems {
-		return out.Send(ctx, acc)
+		return out.Send(ctx, state)
 	}
 	return nil
+}
+
+// Scan continuously accumulates state O across an unbounded or bounded stream.
+// After every incoming item I, it emits the newly updated state object O to out.
+func Scan[I any, O any](
+	ctx context.Context,
+	initialState O,
+	accumulator func(ctx context.Context, state O, item I) (O, error),
+	in streaming.Receiver[I],
+	out streaming.Sender[O],
+) error {
+	state := initialState
+	return in.Receive(ctx, func(ctx context.Context, item I) error {
+		var err error
+		state, err = accumulator(ctx, state, item)
+		if err != nil {
+			return err
+		}
+		return out.Send(ctx, state)
+	})
 }
