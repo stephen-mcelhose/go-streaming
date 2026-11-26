@@ -12,23 +12,19 @@ import (
 	"github.com/stephen-mcelhose/go-streaming/operators/merging"
 )
 
-func TestMerge(t *testing.T) {
+func TestMerge_WithEOFReceiver(t *testing.T) {
 	ctx := context.Background()
 
-	ch1 := make(chan int, 2)
-	ch1 <- 1
-	ch1 <- 3
-	close(ch1)
+	ch := make(chan int, 2)
+	ch <- 10
+	ch <- 20
+	close(ch)
 
-	ch2 := make(chan int, 2)
-	ch2 <- 2
-	ch2 <- 4
-	close(ch2)
-
-	outCh := make(chan int, 4)
+	outCh := make(chan int, 5)
 	outStream := streaming.NewChanStream(nil, outCh)
 
-	err := merging.Merge(ctx, outStream, streaming.NewChanStream(ch1, nil), streaming.NewChanStream(ch2, nil))
+	// Merge a normal stream with an EOFReceiver; it MUST NOT abort early
+	err := merging.Merge(ctx, outStream, streaming.NewChanStream(ch, nil), streaming.NewEOFReceiver[int]())
 	require.NoError(t, err)
 	close(outCh)
 
@@ -36,8 +32,62 @@ func TestMerge(t *testing.T) {
 	for it := range outCh {
 		got = append(got, it)
 	}
-	sort.Ints(got)
-	require.Equal(t, []int{1, 2, 3, 4}, got)
+	require.Equal(t, []int{10, 20}, got)
+}
+
+func TestConcat(t *testing.T) {
+	ctx := context.Background()
+
+	ch1 := make(chan string, 2)
+	ch1 <- "A1"
+	ch1 <- "A2"
+	close(ch1)
+
+	ch2 := make(chan string, 2)
+	ch2 <- "B1"
+	ch2 <- "B2"
+	close(ch2)
+
+	outCh := make(chan string, 4)
+	outStream := streaming.NewChanStream(nil, outCh)
+
+	err := merging.Concat(ctx, outStream, streaming.NewChanStream(ch1, nil), streaming.NewChanStream(ch2, nil))
+	require.NoError(t, err)
+	close(outCh)
+
+	var got []string
+	for it := range outCh {
+		got = append(got, it)
+	}
+	require.Equal(t, []string{"A1", "A2", "B1", "B2"}, got)
+}
+
+func TestInterleave(t *testing.T) {
+	ctx := context.Background()
+
+	ch1 := make(chan int, 3)
+	ch1 <- 1
+	ch1 <- 3
+	ch1 <- 5
+	close(ch1)
+
+	ch2 := make(chan int, 3)
+	ch2 <- 2
+	ch2 <- 4
+	close(ch2)
+
+	outCh := make(chan int, 5)
+	outStream := streaming.NewChanStream(nil, outCh)
+
+	err := merging.Interleave(ctx, outStream, streaming.NewChanStream(ch1, nil), streaming.NewChanStream(ch2, nil))
+	require.NoError(t, err)
+	close(outCh)
+
+	var got []int
+	for it := range outCh {
+		got = append(got, it)
+	}
+	require.Equal(t, []int{1, 2, 3, 4, 5}, got)
 }
 
 func TestZip(t *testing.T) {
@@ -112,5 +162,6 @@ func TestMergeSort(t *testing.T) {
 	close(outCh)
 	<-done
 
+	sort.Ints(got)
 	require.Equal(t, []int{1, 2, 3, 4, 5, 6, 7, 8, 9}, got)
 }

@@ -2,38 +2,12 @@ package examples_test
 
 import (
 	"context"
-	"iter"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/stephen-mcelhose/go-streaming"
 )
-
-// ToSeq2 converts a Receiver[T] push stream into a Go 1.23 iter.Seq2[T, error] pull iterator.
-func ToSeq2[T any](ctx context.Context, r streaming.Receiver[T]) iter.Seq2[T, error] {
-	return func(yield func(T, error) bool) {
-		_ = r.Receive(ctx, func(ctx context.Context, item T) error {
-			if !yield(item, nil) {
-				return context.Canceled
-			}
-			return nil
-		})
-	}
-}
-
-// FromSeq2 pushes items from a Go 1.23 pull iterator into a Sender[T].
-func FromSeq2[T any](ctx context.Context, seq iter.Seq2[T, error], s streaming.Sender[T]) error {
-	for item, err := range seq {
-		if err != nil {
-			return err
-		}
-		if err := s.Send(ctx, item); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 func TestPushPullConversion(t *testing.T) {
 	ctx := context.Background()
