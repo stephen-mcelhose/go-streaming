@@ -5,33 +5,33 @@ import (
 	"io"
 )
 
-// NoopSender discards all sent items and always returns nil.
+// NoopSender discards all sent items and returns nil.
 type NoopSender[T any] struct{}
 
-// NewNoopSender creates a NoopSender that discards all outgoing items.
+// NewNoopSender creates a NoopSender.
 func NewNoopSender[T any]() *NoopSender[T] {
 	return &NoopSender[T]{}
 }
 
-// Send discards item and returns nil immediately.
+// Send discards item and returns nil.
 func (s *NoopSender[T]) Send(ctx context.Context, item T) error {
 	return nil
 }
 
-// NoopReceiver emits nothing and terminates cleanly without invoking the handler.
+// NoopReceiver never yields items to handler and returns nil immediately on Receive.
 type NoopReceiver[T any] struct{}
 
-// NewNoopReceiver creates a NoopReceiver that terminates immediately with nil.
+// NewNoopReceiver creates a NoopReceiver.
 func NewNoopReceiver[T any]() *NoopReceiver[T] {
 	return &NoopReceiver[T]{}
 }
 
-// Receive immediately returns nil without calling handler.
+// Receive immediately returns nil without invoking handler.
 func (s *NoopReceiver[T]) Receive(ctx context.Context, handler func(ctx context.Context, item T) error) error {
 	return nil
 }
 
-// EOFSender always returns io.EOF on any Send call.
+// EOFSender always returns io.EOF on Send without accepting the item.
 type EOFSender[T any] struct{}
 
 // NewEOFSender creates an EOFSender.
@@ -86,6 +86,9 @@ func (s *ChanStream[T]) Receive(ctx context.Context, handler func(ctx context.Co
 		return nil
 	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -105,6 +108,9 @@ func (s *ChanStream[T]) Send(ctx context.Context, item T) error {
 	if s.sender == nil {
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -113,25 +119,32 @@ func (s *ChanStream[T]) Send(ctx context.Context, item T) error {
 	}
 }
 
-// ChanStreamCloser extends ChanStream with io.Closer to close the sender channel.
+// ChanStreamCloser extends ChanStream with explicit io.Closer semantics.
+// It is useful when stream producer ownership is transferred and the underlying
+// channel must be closed upon pipeline termination.
 type ChanStreamCloser[T any] struct {
 	*ChanStream[T]
-	closeSender chan<- T
+	closeSender func() error
 }
 
-// NewChanStreamCloser creates a ChanStreamCloser that closes the sender channel upon Close().
-func NewChanStreamCloser[T any](receiver <-chan T, sender chan<- T) *ChanStreamCloser[T] {
+// NewChanStreamCloser creates a ChanStreamCloser wrapping an ingest receiver channel and an egress sender channel.
+// Calling Close() closes the sender channel if non-nil.
+func NewChanStreamCloser[T any](receiver <-chan T, sender chan T) *ChanStreamCloser[T] {
 	return &ChanStreamCloser[T]{
-		ChanStream:  NewChanStream(receiver, sender),
-		closeSender: sender,
+		ChanStream: NewChanStream[T](receiver, sender),
+		closeSender: func() error {
+			if sender != nil {
+				close(sender)
+			}
+			return nil
+		},
 	}
 }
 
-// Close closes the underlying sender channel if present.
-func (s *ChanStreamCloser[T]) Close() error {
-	if s.closeSender != nil {
-		close(s.closeSender)
-		s.closeSender = nil
+// Close closes the underlying sender channel.
+func (c *ChanStreamCloser[T]) Close() error {
+	if c.closeSender != nil {
+		return c.closeSender()
 	}
 	return nil
 }

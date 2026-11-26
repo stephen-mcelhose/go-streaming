@@ -25,6 +25,13 @@ type ScoredState struct {
 	SmoothedVal float64
 }
 
+// WindowedVector represents a rolling window of history items: [x_1, x_2, ..., x_N].
+type WindowedVector struct {
+	Index   int
+	N       int
+	Samples []float64
+}
+
 // StreamingLaTeXScan executes a stateful recurrence equation across a stream using goexeclatex.
 // For every incoming observation:
 // 1. It binds current observation to slot "x".
@@ -55,6 +62,30 @@ func StreamingLaTeXScan(
 		}
 		return nextState, nil
 	}, in, &latexStateAdapter{out: out})
+}
+
+// StreamingLaTeXSumWindow evaluates a discrete summation \sum_{i=1}^{N} x_i over a stream of rolling window buffers.
+func StreamingLaTeXSumWindow(
+	ctx context.Context,
+	latexSumExpr string,
+	in streaming.Receiver[WindowedVector],
+	out streaming.Sender[float64],
+) error {
+	return transformations.Map(ctx, func(ctx context.Context, w WindowedVector) (float64, error) {
+		// Populate indexed subscript slots: x_1, x_2, ..., x_N and bound N
+		slots := make(map[string]float64, len(w.Samples)+1)
+		slots["N"] = float64(len(w.Samples))
+		for i, val := range w.Samples {
+			slots[fmt.Sprintf("x_%d", i+1)] = val
+		}
+
+		// Evaluate LaTeX summation using goexeclatex
+		res, err := goexeclatex.Eval(latexSumExpr, slots)
+		if err != nil {
+			return 0, fmt.Errorf("evaluating latex summation %q: %w", latexSumExpr, err)
+		}
+		return res, nil
+	}, in, out)
 }
 
 // latexStateAdapter maps internal scalar state into the downstream typed ScoredState stream.
@@ -100,6 +131,30 @@ func TestLaTeXStreaming(t *testing.T) {
 		require.InDelta(t, 12.5, results[1].SmoothedVal, 1e-6)
 		require.InDelta(t, 21.25, results[2].SmoothedVal, 1e-6)
 	})
+
+	t.Run("MUST evaluate LaTeX discrete summation \\sum_{i=1}^{N} x_i over windowed stream", func(t *testing.T) {
+		// Discrete summation formula: \sum_{i=1}^{N} x_i
+		const sumFormula = `\sum_{i=1}^{N} x_i`
+
+		inCh := make(chan WindowedVector, 2)
+		inCh <- WindowedVector{Index: 1, Samples: []float64{10.0, 20.0, 30.0}}      // Sum = 60.0
+		inCh <- WindowedVector{Index: 2, Samples: []float64{5.0, 15.0, 25.0, 35.0}} // Sum = 80.0
+		close(inCh)
+
+		outCh := make(chan float64, 2)
+		err := StreamingLaTeXSumWindow(ctx, sumFormula, streaming.NewChanStream(inCh, nil), streaming.NewChanStream(nil, outCh))
+		require.NoError(t, err)
+		close(outCh)
+
+		var sums []float64
+		for s := range outCh {
+			sums = append(sums, s)
+		}
+
+		require.Equal(t, 2, len(sums))
+		require.InDelta(t, 60.0, sums[0], 1e-6)
+		require.InDelta(t, 80.0, sums[1], 1e-6)
+	})
 }
 
 // Example_latexStreaming demonstrates evaluating a stateful mathematical recurrence relation
@@ -141,4 +196,36 @@ func Example_latexStreaming() {
 	// Step #2: Filled slots -> Evaluated S_2 = 106.00
 	// Step #3: Filled slots -> Evaluated S_3 = 107.20
 	// Step #4: Filled slots -> Evaluated S_4 = 114.04
+}
+
+// Example_latexSummation demonstrates using goexeclatex to evaluate a LaTeX summation
+// \sum_{i=1}^{N} x_i across a stream of rolling window buffers.
+func Example_latexSummation() {
+	ctx := context.Background()
+
+	// Rolling windows of measurements
+	windows := make(chan WindowedVector, 2)
+	windows <- WindowedVector{Index: 1, Samples: []float64{10.0, 20.0, 30.0}}
+	windows <- WindowedVector{Index: 2, Samples: []float64{5.0, 15.0, 25.0, 35.0}}
+	close(windows)
+
+	// Direct LaTeX discrete summation syntax
+	const formula = `\sum_{i=1}^{N} x_i`
+	outCh := make(chan float64, 2)
+
+	_ = StreamingLaTeXSumWindow(ctx, formula,
+		streaming.NewChanStream(windows, nil),
+		streaming.NewChanStream(nil, outCh),
+	)
+	close(outCh)
+
+	winIdx := 1
+	for sum := range outCh {
+		fmt.Printf("Window #%d Sum: \\sum_{i=1}^{N} x_i = %.1f\n", winIdx, sum)
+		winIdx++
+	}
+
+	// Output:
+	// Window #1 Sum: \sum_{i=1}^{N} x_i = 60.0
+	// Window #2 Sum: \sum_{i=1}^{N} x_i = 80.0
 }
