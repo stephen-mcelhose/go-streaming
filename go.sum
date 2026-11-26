@@ -1,3 +1,5 @@
+github.com/stephen-mcelhose/goexeclatex v0.0.0-20260823164644-3e23e47dac82 h1:OQ0JA5+XSlJ9aorE3kjhbAm5hIzPhf8ciRNXNvMIgVQ=
+github.com/stephen-mcelhose/goexeclatex v0.0.0-20260823164644-3e23e47dac82/go.mod h1:XY1mF5UixYoOT557o7zDaP3bbOG64pWJ6PO3cSSmjVw=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
