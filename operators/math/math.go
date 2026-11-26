@@ -9,8 +9,13 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-// Number represents integer or floating point types.
+// Number represents any numeric type that supports addition and standard arithmetic (integers, floats, complex).
 type Number interface {
+	constraints.Integer | constraints.Float | constraints.Complex
+}
+
+// OrderedNumber represents numeric types that support total ordering (integers and floats).
+type OrderedNumber interface {
 	constraints.Integer | constraints.Float
 }
 
@@ -28,7 +33,7 @@ func RunningSum[T Number](ctx context.Context, in streaming.Receiver[T], out str
 	}, in, out)
 }
 
-// StatsSnapshot contains standard descriptive summary statistics.
+// StatsSnapshot contains standard descriptive summary statistics for ordered numeric streams.
 type StatsSnapshot struct {
 	Count    int64
 	Sum      float64
@@ -48,9 +53,9 @@ type welfordState struct {
 	m2    float64
 }
 
-// Stats accumulates a bounded stream into descriptive summary statistics (Min, Max, Mean, Variance, StdDev).
+// Stats accumulates an ordered bounded stream into descriptive summary statistics (Min, Max, Mean, Variance, StdDev).
 // Implemented via Welford's algorithm for numerical stability.
-func Stats[T Number](ctx context.Context, in streaming.Receiver[T], out streaming.Sender[StatsSnapshot]) error {
+func Stats[T OrderedNumber](ctx context.Context, in streaming.Receiver[T], out streaming.Sender[StatsSnapshot]) error {
 	initial := welfordState{min: math.MaxFloat64, max: -math.MaxFloat64}
 
 	return pure.Reduce(ctx, initial, func(s welfordState, val T) welfordState {

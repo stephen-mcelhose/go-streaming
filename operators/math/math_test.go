@@ -14,46 +14,76 @@ import (
 func TestSum(t *testing.T) {
 	ctx := context.Background()
 
-	inCh := make(chan int, 4)
-	inCh <- 10
-	inCh <- 20
-	inCh <- 30
-	inCh <- 40
-	close(inCh)
+	t.Run("MUST sum integer stream", func(t *testing.T) {
+		inCh := make(chan int, 4)
+		inCh <- 10
+		inCh <- 20
+		inCh <- 30
+		inCh <- 40
+		close(inCh)
 
-	outCh := make(chan int, 1)
-	inStream := streaming.NewChanStream(inCh, nil)
-	outStream := streaming.NewChanStream(nil, outCh)
+		outCh := make(chan int, 1)
+		err := mathops.Sum(ctx, streaming.NewChanStream(inCh, nil), streaming.NewChanStream(nil, outCh))
+		require.NoError(t, err)
+		close(outCh)
 
-	err := mathops.Sum(ctx, inStream, outStream)
-	require.NoError(t, err)
-	close(outCh)
+		require.Equal(t, 100, <-outCh)
+	})
 
-	require.Equal(t, 100, <-outCh)
+	t.Run("MUST sum complex128 stream", func(t *testing.T) {
+		inCh := make(chan complex128, 2)
+		inCh <- 1 + 2i
+		inCh <- 3 + 4i
+		close(inCh)
+
+		outCh := make(chan complex128, 1)
+		err := mathops.Sum(ctx, streaming.NewChanStream(inCh, nil), streaming.NewChanStream(nil, outCh))
+		require.NoError(t, err)
+		close(outCh)
+
+		require.Equal(t, 4+6i, <-outCh)
+	})
 }
 
 func TestRunningSum(t *testing.T) {
 	ctx := context.Background()
 
-	inCh := make(chan float64, 3)
-	inCh <- 1.5
-	inCh <- 2.5
-	inCh <- 3.0
-	close(inCh)
+	t.Run("MUST emit running sum for floats", func(t *testing.T) {
+		inCh := make(chan float64, 3)
+		inCh <- 1.5
+		inCh <- 2.5
+		inCh <- 3.0
+		close(inCh)
 
-	outCh := make(chan float64, 3)
-	inStream := streaming.NewChanStream(inCh, nil)
-	outStream := streaming.NewChanStream(nil, outCh)
+		outCh := make(chan float64, 3)
+		err := mathops.RunningSum(ctx, streaming.NewChanStream(inCh, nil), streaming.NewChanStream(nil, outCh))
+		require.NoError(t, err)
+		close(outCh)
 
-	err := mathops.RunningSum(ctx, inStream, outStream)
-	require.NoError(t, err)
-	close(outCh)
+		var running []float64
+		for v := range outCh {
+			running = append(running, v)
+		}
+		require.Equal(t, []float64{1.5, 4.0, 7.0}, running)
+	})
 
-	var running []float64
-	for v := range outCh {
-		running = append(running, v)
-	}
-	require.Equal(t, []float64{1.5, 4.0, 7.0}, running)
+	t.Run("MUST emit running sum for complex128", func(t *testing.T) {
+		inCh := make(chan complex128, 2)
+		inCh <- 1 + 1i
+		inCh <- 2 + 3i
+		close(inCh)
+
+		outCh := make(chan complex128, 2)
+		err := mathops.RunningSum(ctx, streaming.NewChanStream(inCh, nil), streaming.NewChanStream(nil, outCh))
+		require.NoError(t, err)
+		close(outCh)
+
+		var running []complex128
+		for v := range outCh {
+			running = append(running, v)
+		}
+		require.Equal(t, []complex128{1 + 1i, 3 + 4i}, running)
+	})
 }
 
 func TestStats(t *testing.T) {
