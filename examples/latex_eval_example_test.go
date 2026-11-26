@@ -12,101 +12,133 @@ import (
 	"github.com/stephen-mcelhose/goexeclatex"
 )
 
-// CoordinatePoint represents a 2D position (X, Y) emitted from a sensor or physics simulator.
-type CoordinatePoint struct {
-	ID string
-	X  float64
-	Y  float64
+// LaTeXMetricObservation represents an incoming numeric measurement from a sensor, pricing feed, or telemetry stream.
+type LaTeXMetricObservation struct {
+	Timestamp int64
+	Value     float64
 }
 
-// EvaluatedPoint holds the original point and the evaluated LaTeX result.
-type EvaluatedPoint struct {
-	ID       string
-	X        float64
-	Y        float64
-	Distance float64
+// ScoredState represents the accumulated state output after filling LaTeX equation slots at each step.
+type ScoredState struct {
+	Timestamp   int64
+	Input       float64
+	SmoothedVal float64
 }
 
-// StreamingLaTeXMap applies a LaTeX mathematical expression to every point in a stream using goexeclatex.Eval.
-func StreamingLaTeXMap(
+// StreamingLaTeXScan executes a stateful recurrence equation across a stream using goexeclatex.
+// For every incoming observation:
+// 1. It binds current observation to slot "x".
+// 2. It binds previous accumulated state to slot "s".
+// 3. It binds constant parameters (like alpha or weights) to their respective slots.
+// 4. It evaluates the LaTeX recurrence relation (e.g. `a \cdot x + (1 - a) \cdot s`) and carries the result forward.
+func StreamingLaTeXScan(
 	ctx context.Context,
-	latexExpr string,
-	in streaming.Receiver[CoordinatePoint],
-	out streaming.Sender[EvaluatedPoint],
+	latexRecurrenceExpr string,
+	params map[string]float64,
+	initialState float64,
+	in streaming.Receiver[LaTeXMetricObservation],
+	out streaming.Sender[ScoredState],
 ) error {
-	return transformations.Map(ctx, func(ctx context.Context, pt CoordinatePoint) (EvaluatedPoint, error) {
-		vars := map[string]float64{
-			"x": pt.X,
-			"y": pt.Y,
+	return transformations.Scan(ctx, initialState, func(ctx context.Context, prevState float64, obs LaTeXMetricObservation) (float64, error) {
+		// Populate equation slots for this step
+		slots := make(map[string]float64, len(params)+2)
+		for k, v := range params {
+			slots[k] = v
 		}
-		res, err := goexeclatex.Eval(latexExpr, vars)
+		slots["x"] = obs.Value // Current input item slot
+		slots["s"] = prevState // Previous accumulated state slot
+
+		// Evaluate stateful LaTeX recurrence
+		nextState, err := goexeclatex.Eval(latexRecurrenceExpr, slots)
 		if err != nil {
-			return EvaluatedPoint{}, fmt.Errorf("evaluating latex %q: %w", latexExpr, err)
+			return 0, fmt.Errorf("evaluating latex recurrence %q: %w", latexRecurrenceExpr, err)
 		}
-		return EvaluatedPoint{
-			ID:       pt.ID,
-			X:        pt.X,
-			Y:        pt.Y,
-			Distance: res,
-		}, nil
-	}, in, out)
+		return nextState, nil
+	}, in, &latexStateAdapter{out: out})
+}
+
+// latexStateAdapter maps internal scalar state into the downstream typed ScoredState stream.
+type latexStateAdapter struct {
+	out streaming.Sender[ScoredState]
+}
+
+func (a *latexStateAdapter) Send(ctx context.Context, val float64) error {
+	return a.out.Send(ctx, ScoredState{
+		SmoothedVal: val,
+	})
 }
 
 func TestLaTeXStreaming(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("MUST compute distance for all points using goexeclatex", func(t *testing.T) {
-		const formula = `\sqrt{x^2 + y^2}`
+	t.Run("MUST execute stateful LaTeX recurrence step-by-step filling slots", func(t *testing.T) {
+		// Recurrence relation: S_t = a*x + (1-a)*s (Exponential smoothing)
+		const recurrenceFormula = `a x + (1 - a) s`
+		params := map[string]float64{"a": 0.5}
 
-		inCh := make(chan CoordinatePoint, 3)
-		inCh <- CoordinatePoint{ID: "p1", X: 3.0, Y: 4.0}  // sqrt(9+16) = 5.0
-		inCh <- CoordinatePoint{ID: "p2", X: 6.0, Y: 8.0}  // sqrt(36+64) = 10.0
-		inCh <- CoordinatePoint{ID: "p3", X: 5.0, Y: 12.0} // sqrt(25+144) = 13.0
+		inCh := make(chan LaTeXMetricObservation, 3)
+		inCh <- LaTeXMetricObservation{Timestamp: 1000, Value: 10.0} // S_1 = 0.5(10) + 0.5(0) = 5.0
+		inCh <- LaTeXMetricObservation{Timestamp: 1010, Value: 20.0} // S_2 = 0.5(20) + 0.5(5) = 12.5
+		inCh <- LaTeXMetricObservation{Timestamp: 1020, Value: 30.0} // S_3 = 0.5(30) + 0.5(12.5) = 21.25
 		close(inCh)
 
-		outCh := make(chan EvaluatedPoint, 3)
-		err := StreamingLaTeXMap(ctx, formula, streaming.NewChanStream(inCh, nil), streaming.NewChanStream(nil, outCh))
+		outCh := make(chan ScoredState, 3)
+		err := StreamingLaTeXScan(ctx, recurrenceFormula, params, 0.0,
+			streaming.NewChanStream(inCh, nil),
+			streaming.NewChanStream(nil, outCh),
+		)
 		require.NoError(t, err)
 		close(outCh)
 
-		var results []EvaluatedPoint
+		var results []ScoredState
 		for res := range outCh {
 			results = append(results, res)
 		}
 
 		require.Equal(t, 3, len(results))
-		require.InDelta(t, 5.0, results[0].Distance, 1e-6)
-		require.InDelta(t, 10.0, results[1].Distance, 1e-6)
-		require.InDelta(t, 13.0, results[2].Distance, 1e-6)
+		require.InDelta(t, 5.0, results[0].SmoothedVal, 1e-6)
+		require.InDelta(t, 12.5, results[1].SmoothedVal, 1e-6)
+		require.InDelta(t, 21.25, results[2].SmoothedVal, 1e-6)
 	})
 }
 
-// Example_latexStreaming demonstrates evaluating LaTeX math formulas on streaming records using goexeclatex.
-// In data science and physics pipelines, users can express transformations as mathematical equations
-// (like \sqrt{x^2 + y^2}) and evaluate them dynamically across streaming data.
+// Example_latexStreaming demonstrates evaluating a stateful mathematical recurrence relation
+// directly from a LaTeX formula: S_t = a \cdot x + (1 - a) \cdot s
+// As each incoming metric arrives, it dynamically fills the current item slot ("x") and
+// previous accumulated state slot ("s"), passing the result to the next iteration.
 func Example_latexStreaming() {
 	ctx := context.Background()
 
-	// Ingress stream of 2D location points
-	points := make(chan CoordinatePoint, 3)
-	points <- CoordinatePoint{ID: "sensor_alpha", X: 3.0, Y: 4.0}
-	points <- CoordinatePoint{ID: "sensor_beta", X: 1.0, Y: 1.0}
-	points <- CoordinatePoint{ID: "sensor_gamma", X: 5.0, Y: 12.0}
-	close(points)
+	// Ingress stream of sensor readings
+	readings := make(chan LaTeXMetricObservation, 4)
+	readings <- LaTeXMetricObservation{Timestamp: 100, Value: 100.0}
+	readings <- LaTeXMetricObservation{Timestamp: 101, Value: 120.0}
+	readings <- LaTeXMetricObservation{Timestamp: 102, Value: 110.0}
+	readings <- LaTeXMetricObservation{Timestamp: 103, Value: 130.0}
+	close(readings)
 
-	const formula = `\sqrt{x^2 + y^2}`
-	evaluatedCh := make(chan EvaluatedPoint, 3)
+	// LaTeX recurrence formula: S_t = a * x + (1 - a) * s (Exponential Moving Average)
+	const formula = `a x + (1 - a) s`
+	params := map[string]float64{"a": 0.3}
 
-	_ = StreamingLaTeXMap(ctx, formula, streaming.NewChanStream(points, nil), streaming.NewChanStream(nil, evaluatedCh))
+	evaluatedCh := make(chan ScoredState, 4)
+
+	_ = StreamingLaTeXScan(ctx, formula, params, 100.0,
+		streaming.NewChanStream(readings, nil),
+		streaming.NewChanStream(nil, evaluatedCh),
+	)
 	close(evaluatedCh)
 
+	step := 1
 	for res := range evaluatedCh {
-		fmt.Printf("Point %s (%.1f, %.1f): Calculated Distance = %.2f\n",
-			res.ID, res.X, res.Y, res.Distance)
+		fmt.Printf("Step #%d: Filled slots -> Evaluated S_%d = %.2f\n",
+			step, step, res.SmoothedVal)
+		step++
 	}
 
 	// Output:
-	// Point sensor_alpha (3.0, 4.0): Calculated Distance = 5.00
-	// Point sensor_beta (1.0, 1.0): Calculated Distance = 1.41
-	// Point sensor_gamma (5.0, 12.0): Calculated Distance = 13.00
+	// Step #1: Filled slots -> Evaluated S_1 = 100.00
+	// Step #2: Filled slots -> Evaluated S_2 = 106.00
+	// Step #3: Filled slots -> Evaluated S_3 = 107.20
+	// Step #4: Filled slots -> Evaluated S_4 = 114.04
 }
