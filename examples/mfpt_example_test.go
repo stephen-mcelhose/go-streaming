@@ -20,6 +20,11 @@ type TimedReading struct {
 }
 
 // MFPTSnapshot contains running statistics on the time it takes for a process to reach a threshold.
+//
+// Academic Citations:
+//   - Sidney Redner, "A Guide to First-Passage Processes", Cambridge University Press, 2001. https://doi.org/10.1017/CBO9780511606014
+//   - S. Condamin, O. Bénichou, et al., "First-passage times in complex scale-invariant media", Nature, 450:77–80, 2007. https://doi.org/10.1038/nature06201
+//   - Wikipedia: https://en.wikipedia.org/wiki/First-hitting-time_model
 type MFPTSnapshot struct {
 	PassageCount int           // Number of times the threshold was reached
 	MeanDuration time.Duration // Running average time to reach threshold (MFPT)
@@ -43,6 +48,10 @@ type mfptAccumulatorState struct {
 // 1. It records the elapsed time (duration) since the start of the current cycle.
 // 2. Updates the running average duration using Welford's algorithm.
 // 3. Resets the cycle timer to start measuring the next passage time.
+//
+// Academic Citations:
+//   - Sidney Redner, "A Guide to First-Passage Processes", Cambridge University Press, 2001. https://doi.org/10.1017/CBO9780511606014
+//   - Wikipedia: https://en.wikipedia.org/wiki/First-hitting-time_model
 func RunningMFPT(
 	ctx context.Context,
 	isBarrier func(val float64) bool,

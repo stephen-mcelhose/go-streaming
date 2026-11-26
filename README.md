@@ -18,9 +18,9 @@ A modular, composable, typed stream-processing library for Go built on simple, c
   - **Aggregations**: `Buffer` (count), `Batch` (hybrid count+time), `TumblingWindow` (time)
   - **Merging**: `Merge` (concurrent fan-in), `Concat` (sequential), `Interleave` (fair round-robin), `Zip`, `MergeSort` (heap)
   - **Routing**: `Broadcast` (fail-fast), `BroadcastBestEffort`, `RoundRobin`, `Partition` (with default/DLQ fallback)
-  - **Control**: `Throttle`, `Debounce`, `RetrySender` (with backoff & DLQ fallback), `CUSUM` (change-point detection)
+  - **Control**: `Throttle`, `Debounce`, `RetrySender` (with backoff & DLQ fallback), `CUSUM` (Page's change-point detection)
   - **Pure Functional**: `pure` (Map, Filter, Reduce, Scan without error tuples)
-  - **Math & Statistics**: `math` (`Welford`, `BivariateWelford`, `Covariance`, `PearsonCorrelation`, `Moments` with Skewness & Kurtosis, `Sum`, `RunningSum`, `Stats`, `EMA` supporting Real & Complex numbers)
+  - **Math & Statistics**: `math` (`Welford`, `BivariateWelford`, `Covariance`, `PearsonCorrelation`, `Moments` with Skewness & Kurtosis, `StreamingFFT` with Cooley-Tukey Radix-2, `Sum`, `RunningSum`, `Stats`, `EMA` supporting Real & Complex numbers)
 - **Production-Ready Adapters**: Google Cloud Pub/Sub, JSON Lines (`io.Reader`/`io.Writer`), Cloud Object Storage (S3/GCS), HTTP Server-Sent Events (SSE), gRPC streams, Go channels, and message brokers.
 
 ---
@@ -61,35 +61,44 @@ Optional lifecycle closers (`ReceiverCloser[T]`, `SenderCloser[T]`, `StreamClose
 
 ## Operator Matrix
 
-| Category | Operator | Description |
-|---|---|---|
-| **Transform** | `Map[I, O]` | Transforms elements 1:1 using `func(ctx, I) (O, error)`. |
-| | `FlatMap[I, O]` | Expands 1 input element into a sub-stream `Receiver[O]`. |
-| | `Filter[T]` | Filters stream based on predicate `func(ctx, T) (bool, error)`. |
-| | `Reduce[I, O]` | Accumulates bounded stream into terminal state object `O`. |
-| | `Scan[I, O]` | Continuously emits running accumulated state `O` after every item. |
-| **Aggregation** | `Buffer[T]` | Gathers items into count-based chunks. |
-| | `Batch[T]` | Hybrid micro-batching triggered by item count or max duration. |
-| | `TumblingWindow[T]`| Time-windowed grouping of stream elements. |
-| **Merge** | `Merge[T]` | Concurrently merges multiple receivers into one sender. |
-| | `Concat[T]` | Serially exhausts streams one after another ($R_1 \to R_2 \to \dots$). |
-| | `Interleave[T]` | Fair round-robin turn-taking across streams ($A_1, B_1, A_2, \dots$). |
-| | `Zip[A, B, O]` | Pairs items 1:1 from two streams. |
-| | `MergeSort[T]` | Merges pre-sorted partitions via priority queue heap. |
-| **Routing** | `Broadcast[T]` | Concurrently replicates elements to multiple senders (fail-fast). |
-| | `BroadcastBestEffort[T]` | Fire-and-forget fan-out ignoring target delivery failures. |
-| | `RoundRobin[T]` | Cyclically distributes elements across senders. |
-| | `Partition[T, K]`| Key-based partitioning with optional default/DLQ fallback route. |
-| **Control** | `Throttle[T]` | Limits stream throughput to 1 item per duration. |
-| | `Debounce[T]` | Emits item only after quiet duration passes. |
-| | `RetrySender[T]` | Retries failed sends with backoff and optional DLQ fallback. |
-| | `CUSUM[T]` | Page's Cumulative Sum control chart for early detection of mean shifts. |
-| **Pure** | `Map`, `Filter`, `Reduce`, `Scan` | Pure functional wrappers accepting `func(I) O` without error clutter. |
-| **Math & Moments** | `Sum`, `RunningSum` | Total and cumulative summations (Real & Complex). |
-| | `Stats`, `RunningStats` | Single-pass Welford summary moments (Mean, Variance, StdDev, Min, Max). |
-| | `Covariance`, `PearsonCorrelation` | Online bivariate Welford covariance and correlation ($r \in [-1, 1]$). |
-| | `MomentsStats`, `RunningMoments` | Higher-order shape statistics (Skewness and Kurtosis via Pébay recurrence). |
-| | `EMA` | Exponential Moving Average with configurable smoothing weight $\alpha$. |
+| Category | Operator | Description | Citations / References |
+|---|---|---|---|
+| **Transform** | `Map[I, O]` | Transforms elements 1:1 using `func(ctx, I) (O, error)`. | |
+| | `FlatMap[I, O]` | Expands 1 input element into a sub-stream `Receiver[O]`. | |
+| | `Filter[T]` | Filters stream based on predicate `func(ctx, T) (bool, error)`. | |
+| | `Reduce[I, O]` | Accumulates bounded stream into terminal state object `O`. | |
+| | `Scan[I, O]` | Continuously emits running accumulated state `O` after every item. | |
+| **Aggregation** | `Buffer[T]` | Gathers items into count-based chunks. | |
+| | `Batch[T]` | Hybrid micro-batching triggered by item count or max duration. | |
+| | `TumblingWindow[T]`| Time-windowed grouping of stream elements. | |
+| **Merge** | `Merge[T]` | Concurrently merges multiple receivers into one sender. | |
+| | `Concat[T]` | Serially exhausts streams one after another ($R_1 \to R_2 \to \dots$). | |
+| | `Interleave[T]` | Fair round-robin turn-taking across streams ($A_1, B_1, A_2, \dots$). | |
+| | `Zip[A, B, O]` | Pairs items 1:1 from two streams. | |
+| | `MergeSort[T]` | Merges pre-sorted partitions via priority queue heap. | |
+| **Routing** | `Broadcast[T]` | Concurrently replicates elements to multiple senders (fail-fast). | |
+| | `BroadcastBestEffort[T]` | Fire-and-forget fan-out ignoring target delivery failures. | |
+| | `RoundRobin[T]` | Cyclically distributes elements across senders. | |
+| | `Partition[T, K]`| Key-based partitioning with optional default/DLQ fallback route. | |
+| **Control** | `Throttle[T]` | Limits stream throughput to 1 item per duration. | |
+| | `Debounce[T]` | Emits item only after quiet duration passes. | |
+| | `RetrySender[T]` | Retries failed sends with backoff and optional DLQ fallback. | |
+| | `CUSUM[T]` | Page's Cumulative Sum control chart for early detection of mean shifts. | [Page 1954](https://doi.org/10.1093/biomet/41.1-2.100), [Page 1961](https://www.jstor.org/stable/1266470) |
+| **Pure** | `Map`, `Filter`, `Reduce`, `Scan` | Pure functional wrappers accepting `func(I) O` without error clutter. | |
+| **Math & Frequency** | `Sum`, `RunningSum` | Total and cumulative summations (Real & Complex). | |
+| | `Stats`, `RunningStats` | Single-pass Welford summary moments (Mean, Variance, StdDev, Min, Max). | [Welford 1962](https://doi.org/10.1080/00401706.1962.10490022), [Knuth TAOCP Vol 2](https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_algorithm) |
+| | `Covariance`, `PearsonCorrelation` | Online bivariate Welford covariance and correlation ($r \in [-1, 1]$). | [Knuth 1997](https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Covariance) |
+| | `MomentsStats`, `RunningMoments` | Higher-order shape statistics (Skewness and Kurtosis via Pébay recurrence). | [Pébay 2008](https://prod-ng.sandia.gov/techlib-noauth/access-control.cgi/2008/086212.pdf) |
+| | `StreamingFFT` | Radix-2 Decimation-in-Time Fast Fourier Transform over window chunks. | [Cooley & Tukey 1965](https://doi.org/10.1090/S0025-5718-1965-0178586-1) |
+| | `EMA` | Exponential Moving Average with configurable smoothing weight $\alpha$. | |
+
+---
+
+## Advanced Domain Recipes (`examples/`)
+
+- **[Mean First Passage Time (MFPT / Barrier Renewal)](examples/mfpt_example_test.go)**: Measures average hitting times and burst renewal cycles ([Redner 2001](https://doi.org/10.1017/CBO9780511606014), [Condamin et al. Nature 2007](https://doi.org/10.1038/nature06201)).
+- **[Goertzel Single-Tone Frequency Detector](examples/dsp_goertzel_example_test.go)**: 2nd-order IIR filter for $\mathcal{O}(1)$ single-frequency detection ([Goertzel 1958](https://doi.org/10.2307/2310304)).
+- **[Declarative LaTeX Formula Execution (`goexeclatex`)](examples/latex_eval_example_test.go)**: Evaluates dynamic recurrence relations ($S_t = a x + (1-a)s$) and window summations ($\sum_{i=1}^N x_i$) over streams.
 
 ---
 

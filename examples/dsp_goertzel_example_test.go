@@ -13,6 +13,11 @@ import (
 )
 
 // GoertzelConfig configures single-frequency tone detection parameters.
+//
+// Academic Citations:
+//   - Gerald Goertzel, "An Algorithm for the Evaluation of Finite Trigonometric Series",
+//     The American Mathematical Monthly, 65(1):34–35, 1958. https://doi.org/10.2307/2310304
+//   - Wikipedia: https://en.wikipedia.org/wiki/Goertzel_algorithm
 type GoertzelConfig struct {
 	TargetFreqHz float64 // The specific tone frequency we want to detect (e.g. 1000 Hz)
 	SampleRateHz float64 // Sample rate of the incoming audio/sensor stream (e.g. 8000 Hz)
@@ -43,6 +48,11 @@ type goertzelState struct {
 
 // StreamingGoertzel detects whether a specific tone frequency is present in an audio/signal stream
 // without needing to compute a full, heavy Fast Fourier Transform (FFT).
+//
+// Academic Citations:
+//   - Gerald Goertzel, "An Algorithm for the Evaluation of Finite Trigonometric Series",
+//     The American Mathematical Monthly, 65(1):34–35, 1958. https://doi.org/10.2307/2310304
+//   - Wikipedia: https://en.wikipedia.org/wiki/Goertzel_algorithm
 func StreamingGoertzel(
 	ctx context.Context,
 	cfg GoertzelConfig,
