@@ -117,11 +117,13 @@ func Example_mather() {
 	// Total Integrated Pulse Energy: 39.0 Joules (normalized)
 }
 
-// iqPulseStream generates an analytic RF IQ pulse burst (complex128):
-// - Sample 0: Carrier baseline (1.0 + 0.0i) -> |z|=1.0, Phase=0
-// - Sample 1: Chirp phase shift (0.0 + 2.0i) -> |z|=2.0, Phase=+pi/2 (+1.57 rad)
-// - Sample 2: Further phase shift (-3.0 + 0.0i) -> |z|=3.0, Phase=+pi (+3.14 rad)
-// - Sample 3: High power burst (3.0 + 4.0i) -> |z|=5.0, Phase=+0.93 rad
+// iqPulseStream generates a stream of complex baseband IQ samples (complex128) representing
+// an analytic radio-frequency (RF) radar or communications burst: z[n] = I[n] + j*Q[n].
+// For Mathematicians and DSP Engineers, this discrete-time sequence models:
+// - Sample 0: Baseline unmodulated carrier (1.0 + 0.0i) -> Magnitude=1.0, Phase=0.0 rad, Power=1.0
+// - Sample 1: Orthogonal quadrature chirp step (0.0 + 2.0i) -> Magnitude=2.0, Phase=+pi/2 rad (+1.57 rad), Power=4.0
+// - Sample 2: Counter-phase excursion (-3.0 + 0.0i) -> Magnitude=3.0, Phase=+pi rad (+3.14 rad), Power=9.0
+// - Sample 3: High-power modulated symbol (3.0 + 4.0i) -> Magnitude=5.0, Phase=arctan(4/3) (+0.93 rad), Power=25.0
 func iqPulseStream() <-chan complex128 {
 	iqCh := make(chan complex128, 4)
 	samples := []complex128{

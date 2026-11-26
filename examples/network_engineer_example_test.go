@@ -94,7 +94,9 @@ func Example_networkEngineer() {
 	// Pager Alert: [CRITICAL] SYN Flood #2
 }
 
-// networkPacketStream returns a live simulated feed of raw packet captures containing TCP and UDP traffic.
+// networkPacketStream simulates real-time packet ingress captured from network interfaces via eBPF/PCAP.
+// For Network Engineers and NetOps teams, this feed contains mixed transport protocols, including standard
+// HTTP web traffic (TCP:80), DNS lookups (UDP:53), and port probes targeting SMB (TCP:445) and RDP (TCP:3389).
 func networkPacketStream() <-chan NetworkPacket {
 	packetCh := make(chan NetworkPacket, 4)
 	packetCh <- NetworkPacket{SrcIP: "192.168.1.50", DstPort: 80, Protocol: "TCP", Bytes: 120}
@@ -105,7 +107,9 @@ func networkPacketStream() <-chan NetworkPacket {
 	return packetCh
 }
 
-// securityAlertStream returns high-priority threat detection events to be replicated across log systems.
+// securityAlertStream produces synthesized high-severity incident notifications from an IDS detector.
+// For SecOps and Observability engineers, this stream must be replicated simultaneously across multiple
+// destinations (e.g. archival cold storage and real-time SIEM indexers) using non-blocking best-effort semantics.
 func securityAlertStream() <-chan SecurityAlert {
 	alertCh := make(chan SecurityAlert, 1)
 	alertCh <- SecurityAlert{Level: "CRITICAL", Message: "Port Scan Detected from 10.0.0.99"}
@@ -113,7 +117,9 @@ func securityAlertStream() <-chan SecurityAlert {
 	return alertCh
 }
 
-// ddosAlertBurstStream simulates a sudden burst of high-frequency attack alerts triggering throttling.
+// ddosAlertBurstStream models a sudden storm of high-frequency incident triggers emitted during an active attack.
+// In network operations and on-call alerting systems, unthrottled burst streams exhaust notification API rate limits
+// and cause responder fatigue; Throttle enforces a deterministic maximum dispatch rate across the stream.
 func ddosAlertBurstStream() <-chan SecurityAlert {
 	burstAlerts := make(chan SecurityAlert, 2)
 	burstAlerts <- SecurityAlert{Level: "CRITICAL", Message: "SYN Flood #1"}

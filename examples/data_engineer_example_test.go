@@ -132,7 +132,10 @@ func Example_dataEngineer() {
 	// ts=40 [corp_b] s_4
 }
 
-// rawClickEventSource returns a JSONL streaming receiver simulating records ingested from S3/GCS.
+// rawClickEventSource provides a streaming JSONL source emulating continuous log files
+// delivered from Cloud Object Storage (S3/GCS) or CDC message connectors.
+// For Data Engineers and Lakehouse Architects, each line contains unstructured, multi-tenant click events
+// with full URLs requiring parsing, validation, and schema conforming before analytical table ingestion.
 func rawClickEventSource() streaming.Receiver[RawClickEvent] {
 	rawJSONL := `{"tenant_id":"corp_a","session_id":"s_101","url":"https://app.io/home","ts":1001}
 {"tenant_id":"corp_b","session_id":"s_201","url":"https://app.io/checkout","ts":1002}
@@ -142,7 +145,10 @@ func rawClickEventSource() streaming.Receiver[RawClickEvent] {
 	return jsonl.NewJsonlStream[RawClickEvent](reader, nil)
 }
 
-// partitionedBackfillStreams creates pre-sorted historical partition streams from two distinct shards.
+// partitionedBackfillStreams creates two independently ordered historical partition streams
+// representing distinct data shards (e.g., Kafka topic partitions or historical hourly S3 prefixes).
+// For Data Engineers executing backfills or compaction runs, MergeSort merges these pre-sorted partitions
+// into a globally ordered chronological time-series stream in O(N log K) time without loading entire datasets into memory.
 func partitionedBackfillStreams() (<-chan CleanClickEvent, <-chan CleanClickEvent) {
 	p1 := make(chan CleanClickEvent, 2)
 	p1 <- CleanClickEvent{TenantID: "corp_a", SessionID: "s_1", Timestamp: 10}

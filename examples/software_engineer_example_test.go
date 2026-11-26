@@ -106,10 +106,12 @@ func Example_softwareEngineer() {
 	// [DLQ ROUTED] job_usr_corrupt (bad@acme.com) routed to DLQ after 3 attempts
 }
 
-// userSignupCommandStream returns a stream representing three distinct real-world execution paths:
-// 1. usr_ok: Valid account signup, succeeds on first dispatch attempt.
-// 2. usr_transient: Experiences temporary connection contention, succeeds on retry #2.
-// 3. usr_corrupt: Invalid configuration, exhausts all 3 retry attempts and routes cleanly to DLQ.
+// userSignupCommandStream produces an event stream representing canonical distributed systems scenarios:
+//   - usr_ok: Happy-path command that processes immediately on initial dispatch.
+//   - usr_transient: Command encountering transient downstream failure (e.g., database connection spike),
+//     recovering on exponential retry attempt #2 without message loss.
+//   - usr_corrupt: Malformed or unprocessable command that exhausts all 3 retry attempts and is routed
+//     cleanly to a Dead Letter Queue (DLQ) for asynchronous inspection without stalling the pipeline.
 func userSignupCommandStream() <-chan UserSignupCommand {
 	commands := make(chan UserSignupCommand, 3)
 	commands <- UserSignupCommand{UserID: "usr_ok", Email: "alice@acme.com", Tier: "pro"}
