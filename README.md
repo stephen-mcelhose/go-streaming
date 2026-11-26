@@ -13,8 +13,15 @@ A modular, composable, typed stream-processing library for Go built on simple, c
 - **Typed Primitives**: Generic `Receiver[T]` and `Sender[T]` contracts decoupled from underlying transport mechanisms.
 - **Context & Error Propagation**: All primitives enforce `context.Context` cancellation and explicit error handling out of the box.
 - **Standard Go 1.23 Iterators**: Seamless bidirectional conversion between push `Receiver[T]` streams and pull `iter.Seq2[T, error]` iterators.
-- **Rich Operator Suite**: Transformations (`Map`, `FlatMap`, `Filter`, `Reduce`, `Scan`), Aggregations (`Buffer`, `Batch`, `TumblingWindow`), Merging (`Merge`, `Concat`, `Interleave`, `Zip`, `MergeSort`), Routing (`Broadcast`, `BroadcastBestEffort`, `RoundRobin`, `Partition`), Control (`Throttle`, `Debounce`, `RetrySender`), Pure functional transformations (`pure`), and Statistical/Numerical streaming primitives (`math`).
-- **Production-Ready Adapters**: Pre-built adapters for Go channels, Google Cloud Pub/Sub, JSON Lines (`io.Reader`/`io.Writer`), Cloud Object Storage (S3/GCS), HTTP Server-Sent Events (SSE), gRPC streams, and message brokers.
+- **Rich Operator Suite**: 
+  - **Transformations**: `Map`, `FlatMap`, `Filter`, `Reduce`, `Scan`
+  - **Aggregations**: `Buffer` (count), `Batch` (hybrid count+time), `TumblingWindow` (time)
+  - **Merging**: `Merge` (concurrent fan-in), `Concat` (sequential), `Interleave` (fair round-robin), `Zip`, `MergeSort` (heap)
+  - **Routing**: `Broadcast` (fail-fast), `BroadcastBestEffort`, `RoundRobin`, `Partition` (with default/DLQ fallback)
+  - **Control**: `Throttle`, `Debounce`, `RetrySender` (with backoff & DLQ fallback)
+  - **Pure Functional**: `pure` (Map, Filter, Reduce, Scan without error tuples)
+  - **Math & Statistics**: `math` (Sum, RunningSum, Welford Stats, EMA supporting Real & Complex numbers)
+- **Production-Ready Adapters**: Google Cloud Pub/Sub, JSON Lines (`io.Reader`/`io.Writer`), Cloud Object Storage (S3/GCS), HTTP Server-Sent Events (SSE), gRPC streams, Go channels, and message brokers.
 
 ---
 
@@ -52,31 +59,70 @@ Optional lifecycle closers (`ReceiverCloser[T]`, `SenderCloser[T]`, `StreamClose
 
 ---
 
-## Architecture & Operators
+## Persona Cookbook: How to Use `go-streaming`
 
-```
-go-streaming/
-├── stream.go                     # Receiver[T], Sender[T], Stream[T], Closers
-├── sentinels.go                  # ChanStream, Noop, and EOF sentinels
-├── errors.go                     # ErrStreamStop, IsCleanTermination
-├── operators/
-│   ├── transformations/          # Map, FlatMap, Filter, Reduce, Scan
-│   ├── aggregation/              # Buffer (count), Batch (hybrid), TumblingWindow (time)
-│   ├── merging/                  # Merge (concurrent), Concat (serial), Interleave, Zip, MergeSort
-│   ├── routing/                  # Broadcast, BroadcastBestEffort, RoundRobin, Partition
-│   ├── control/                  # Throttle, Debounce, RetrySender (with fallback)
-│   ├── pure/                     # Zero-boilerplate pure functional wrappers (Map, Filter, Reduce, Scan)
-│   └── math/                     # Mathematical & statistical primitives (Sum, RunningSum, Stats, EMA)
-└── adapters/
-    ├── gpubsub/                  # Google Cloud Pub/Sub with automatic ACK/NACK management
-    ├── jsonl/                    # JsonlStream (io.Reader / io.Writer)
-    ├── objectstorage/            # Cloud Object Storage JSONL connector
-    ├── http/                     # Server-Sent Events (SSE) Streamer & Receiver
-    ├── grpc/                     # gRPC Client & Server Stream adapters
-    └── messaging/                # Kafka / Generic BrokerStream
+### 1. For Software Engineers: Resilient Async Task Dispatcher
+```go
+// Ingest signup commands, map to email templates, and dispatch with exponential retry + DLQ
+_ = transformations.Map(ctx, func(ctx context.Context, cmd SignupCmd) (EmailJob, error) {
+    return EmailJob{Recipient: cmd.Email, Subject: "Welcome!"}, nil
+}, cmdReceiver, emailJobSender)
+
+retrySender := control.NewRetrySender(emailClientStream, control.RetryPolicy[EmailJob]{
+    MaxAttempts:    3,
+    InitialBackoff: 10 * time.Millisecond,
+    Multiplier:     2.0,
+    FallbackSender: dlqSender, // Auto-route persistent failures to Dead Letter Queue
+})
 ```
 
-### Operator Overview
+### 2. For Data Engineers: ETL Micro-Batching to Object Storage
+```go
+// Ingest JSONL stream, clean/filter records, micro-batch by 500 items or 100ms, write to cloud store
+jsonlSource := jsonl.NewJsonlStream[RawEvent](reader, nil)
+
+_ = aggregation.Batch(ctx, aggregation.BatchConfig{
+    MaxSize: 500,
+    MaxWait: 100 * time.Millisecond,
+}, cleanedEventsReceiver, batchSender)
+
+stageWriter := jsonl.NewJsonlStream[CleanEvent](nil, objectStorageWriter)
+```
+
+### 3. For Network Engineers: Traffic Partitioning & Flood Throttling
+```go
+// Partition network packets by protocol (TCP vs UDP) and throttle security pager alerts
+routes := map[string]streaming.Sender[Packet]{
+    "TCP": tcpMonitoringSender,
+    "UDP": udpMonitoringSender,
+}
+_ = routing.Partition(ctx, func(p Packet) (string, error) { return p.Protocol, nil }, routes, defaultSink, packetReceiver)
+
+// Throttle critical alerts to at most 1 incident page per 100ms during DDoS
+_ = control.Throttle(ctx, 100*time.Millisecond, alertReceiver, pagerSender)
+```
+
+### 4. For Mathematicians & Signal Processing Engineers: Pure Vector Calculations
+```go
+// Process complex signal phase angles without callback error-wrapping boilerplate
+_ = pure.Map(ctx, func(z complex128) float64 {
+    return cmplx.Phase(z)
+}, complexSignalReceiver, phaseSender)
+
+// Exact vector summation over complex stream
+_ = mathops.Sum(ctx, complexVectorReceiver, sumSender)
+```
+
+### 5. For Data Scientists: Online Stream Statistics & Anomaly Detection
+```go
+// Real-time Exponential Moving Average (EMA) and online Welford summary statistics
+_ = mathops.EMA(ctx, 0.2, latencyReceiver, emaSender)
+_ = mathops.Stats(ctx, sampleReceiver, statsSender) // Emits Count, Mean, Variance, StdDev, Min, Max
+```
+
+---
+
+## Operator Matrix
 
 | Category | Operator | Description |
 |---|---|---|
@@ -101,7 +147,7 @@ go-streaming/
 | | `Debounce[T]` | Emits item only after quiet duration passes. |
 | | `RetrySender[T]` | Retries failed sends with backoff and optional DLQ fallback. |
 | **Pure** | `Map`, `Filter`, `Reduce`, `Scan` | Pure functional wrappers accepting `func(I) O` without error clutter. |
-| **Math** | `Sum`, `RunningSum`, `Stats`, `EMA` | Dedicated numeric/statistical stream processing built on `pure`. |
+| **Math** | `Sum`, `RunningSum`, `Stats`, `EMA` | Dedicated numeric/statistical stream processing (Real & Complex). |
 
 ---
 
