@@ -13,7 +13,7 @@ A modular, composable, typed stream-processing library for Go built on simple, c
 - **Typed Primitives**: Generic `Receiver[T]` and `Sender[T]` contracts decoupled from underlying transport mechanisms.
 - **Context & Error Propagation**: All primitives enforce `context.Context` cancellation and explicit error handling out of the box.
 - **Standard Go 1.23 Iterators**: Seamless bidirectional conversion between push `Receiver[T]` streams and pull `iter.Seq2[T, error]` iterators.
-- **Rich Operator Suite**: Transformations (`Map`, `FlatMap`, `Filter`, `Reduce`, `Scan`), Aggregations (`Buffer`, `Batch`, `TumblingWindow`), Merging (`Merge`, `Concat`, `Interleave`, `Zip`, `MergeSort`), Routing (`Broadcast`, `BroadcastBestEffort`, `RoundRobin`, `Partition`), Control (`Throttle`, `Debounce`, `RetrySender`), and pure functional wrappers (`pure`).
+- **Rich Operator Suite**: Transformations (`Map`, `FlatMap`, `Filter`, `Reduce`, `Scan`), Aggregations (`Buffer`, `Batch`, `TumblingWindow`), Merging (`Merge`, `Concat`, `Interleave`, `Zip`, `MergeSort`), Routing (`Broadcast`, `BroadcastBestEffort`, `RoundRobin`, `Partition`), Control (`Throttle`, `Debounce`, `RetrySender`), Pure functional transformations (`pure`), and Statistical/Numerical streaming primitives (`math`).
 - **Production-Ready Adapters**: Pre-built adapters for Go channels, Google Cloud Pub/Sub, JSON Lines (`io.Reader`/`io.Writer`), Cloud Object Storage (S3/GCS), HTTP Server-Sent Events (SSE), gRPC streams, and message brokers.
 
 ---
@@ -65,7 +65,8 @@ go-streaming/
 │   ├── merging/                  # Merge (concurrent), Concat (serial), Interleave, Zip, MergeSort
 │   ├── routing/                  # Broadcast, BroadcastBestEffort, RoundRobin, Partition
 │   ├── control/                  # Throttle, Debounce, RetrySender (with fallback)
-│   └── pure/                     # Zero-boilerplate pure functional wrappers (func(I) O)
+│   ├── pure/                     # Zero-boilerplate pure functional wrappers (Map, Filter, Reduce, Scan)
+│   └── math/                     # Mathematical & statistical primitives (Sum, RunningSum, Stats, EMA)
 └── adapters/
     ├── gpubsub/                  # Google Cloud Pub/Sub with automatic ACK/NACK management
     ├── jsonl/                    # JsonlStream (io.Reader / io.Writer)
@@ -100,6 +101,7 @@ go-streaming/
 | | `Debounce[T]` | Emits item only after quiet duration passes. |
 | | `RetrySender[T]` | Retries failed sends with backoff and optional DLQ fallback. |
 | **Pure** | `Map`, `Filter`, `Reduce`, `Scan` | Pure functional wrappers accepting `func(I) O` without error clutter. |
+| **Math** | `Sum`, `RunningSum`, `Stats`, `EMA` | Dedicated numeric/statistical stream processing built on `pure`. |
 
 ---
 
