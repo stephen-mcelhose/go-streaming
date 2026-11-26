@@ -10,7 +10,7 @@ import (
 	"github.com/stephen-mcelhose/go-streaming/operators/routing"
 )
 
-// NetworkPacket represents a captured packet from a network interface (e.g. AF_PACKET / eBPF).
+// NetworkPacket represents a single packet observed on a network interface.
 type NetworkPacket struct {
 	SrcIP    string
 	DstPort  int
@@ -18,25 +18,24 @@ type NetworkPacket struct {
 	Bytes    int
 }
 
-// SecurityAlert represents a synthesized alert for the incident response team.
+// SecurityAlert represents a generated notification about suspicious activity.
 type SecurityAlert struct {
 	Level   string
 	Message string
 }
 
-// Example_networkEngineer demonstrates how a Network / SecOps Engineer
-// builds a high-throughput telemetry demuxing and alert squashing pipeline:
-// 1. Ingests raw network packet captures from network interfaces.
-// 2. Partitions packets by protocol (TCP vs UDP) into dedicated processing streams via routing.Partition.
-// 3. Replicates security telemetry to multiple sinks (SIEM archive and real-time IDS) via routing.BroadcastBestEffort.
-// 4. Rate-limits (control.Throttle) alert storms to prevent pager flooding during active attacks.
+// Example_networkEngineer demonstrates how to process live network traffic:
+// 1. Reads incoming network packets from an input stream.
+// 2. Splits packets into separate processing paths based on protocol (TCP vs UDP) using routing.Partition.
+// 3. Copies critical security alerts to two destinations at once using routing.BroadcastBestEffort.
+// 4. Limits the rate of outbound notifications using control.Throttle so teams are not overwhelmed during traffic spikes.
 func Example_networkEngineer() {
 	ctx := context.Background()
 
-	// Ingress raw packet stream
+	// Ingress stream of observed network packets
 	packetCh := networkPacketStream()
 
-	// Step 1: Partition packets by transport protocol
+	// Step 1: Split packets into separate TCP and UDP queues
 	tcpSink := make(chan NetworkPacket, 5)
 	udpSink := make(chan NetworkPacket, 5)
 
@@ -57,7 +56,8 @@ func Example_networkEngineer() {
 
 	fmt.Printf("Demuxed: %d TCP packets, %d UDP packets\n", len(tcpSink), len(udpSink))
 
-	// Step 2: Multi-destination fan-out via BroadcastBestEffort (Non-blocking SIEM & IDS telemetry)
+	// Step 2: Send copies of an alert to multiple systems (such as a log archive and an alert dashboard).
+	// BroadcastBestEffort ensures that if one logging target is slow or unavailable, it does not block the other.
 	alertCh := securityAlertStream()
 	siemSink := make(chan SecurityAlert, 1)
 	idsSink := make(chan SecurityAlert, 1)
@@ -72,7 +72,8 @@ func Example_networkEngineer() {
 	close(idsSink)
 	fmt.Printf("Telemetry replicated to SIEM (%d) and IDS (%d)\n", len(siemSink), len(idsSink))
 
-	// Step 3: Throttle burst alerts to prevent on-call pager flood
+	// Step 3: Rate-limit alerts to send at most one notification every 10 milliseconds.
+	// This helps prevent notification spam during sudden traffic surges.
 	burstAlerts := ddosAlertBurstStream()
 	pagerSink := make(chan SecurityAlert, 2)
 	go func() {
@@ -94,22 +95,19 @@ func Example_networkEngineer() {
 	// Pager Alert: [CRITICAL] SYN Flood #2
 }
 
-// networkPacketStream simulates real-time packet ingress captured from network interfaces via eBPF/PCAP.
-// For Network Engineers and NetOps teams, this feed contains mixed transport protocols, including standard
-// HTTP web traffic (TCP:80), DNS lookups (UDP:53), and port probes targeting SMB (TCP:445) and RDP (TCP:3389).
+// networkPacketStream returns a sample stream of captured network packets.
+// It contains web traffic on port 80, DNS queries on port 53, and connection attempts on ports 445 and 3389.
 func networkPacketStream() <-chan NetworkPacket {
 	packetCh := make(chan NetworkPacket, 4)
 	packetCh <- NetworkPacket{SrcIP: "192.168.1.50", DstPort: 80, Protocol: "TCP", Bytes: 120}
-	packetCh <- NetworkPacket{SrcIP: "10.0.0.99", DstPort: 445, Protocol: "TCP", Bytes: 64} // SMB Probe
+	packetCh <- NetworkPacket{SrcIP: "10.0.0.99", DstPort: 445, Protocol: "TCP", Bytes: 64} // Port probe
 	packetCh <- NetworkPacket{SrcIP: "192.168.1.51", DstPort: 53, Protocol: "UDP", Bytes: 512}
-	packetCh <- NetworkPacket{SrcIP: "10.0.0.99", DstPort: 3389, Protocol: "TCP", Bytes: 64} // RDP Probe
+	packetCh <- NetworkPacket{SrcIP: "10.0.0.99", DstPort: 3389, Protocol: "TCP", Bytes: 64} // Port probe
 	close(packetCh)
 	return packetCh
 }
 
-// securityAlertStream produces synthesized high-severity incident notifications from an IDS detector.
-// For SecOps and Observability engineers, this stream must be replicated simultaneously across multiple
-// destinations (e.g. archival cold storage and real-time SIEM indexers) using non-blocking best-effort semantics.
+// securityAlertStream provides a sample urgent alert that needs to be sent to multiple logging systems.
 func securityAlertStream() <-chan SecurityAlert {
 	alertCh := make(chan SecurityAlert, 1)
 	alertCh <- SecurityAlert{Level: "CRITICAL", Message: "Port Scan Detected from 10.0.0.99"}
@@ -117,9 +115,7 @@ func securityAlertStream() <-chan SecurityAlert {
 	return alertCh
 }
 
-// ddosAlertBurstStream models a sudden storm of high-frequency incident triggers emitted during an active attack.
-// In network operations and on-call alerting systems, unthrottled burst streams exhaust notification API rate limits
-// and cause responder fatigue; Throttle enforces a deterministic maximum dispatch rate across the stream.
+// ddosAlertBurstStream produces multiple alerts in rapid succession to test rate limiting.
 func ddosAlertBurstStream() <-chan SecurityAlert {
 	burstAlerts := make(chan SecurityAlert, 2)
 	burstAlerts <- SecurityAlert{Level: "CRITICAL", Message: "SYN Flood #1"}

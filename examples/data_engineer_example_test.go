@@ -15,7 +15,7 @@ import (
 	"github.com/stephen-mcelhose/go-streaming/operators/transformations"
 )
 
-// RawClickEvent represents raw unstructured clickstream events from Kafka/S3.
+// RawClickEvent represents raw, uncleaned web events read directly from a log file or stream.
 type RawClickEvent struct {
 	TenantID  string `json:"tenant_id"`
 	SessionID string `json:"session_id"`
@@ -23,7 +23,7 @@ type RawClickEvent struct {
 	Timestamp int64  `json:"ts"`
 }
 
-// CleanClickEvent represents validated, schema-conforming analytics events.
+// CleanClickEvent represents validated records formatted for long-term database storage.
 type CleanClickEvent struct {
 	TenantID  string `json:"tenant_id"`
 	SessionID string `json:"session_id"`
@@ -31,19 +31,19 @@ type CleanClickEvent struct {
 	Timestamp int64  `json:"ts"`
 }
 
-// Example_dataEngineer demonstrates how a Data Engineer implements a real-world Lakehouse ingestion pipeline:
-// 1. Ingests raw JSONL events from an object store or stream source.
-// 2. Normalizes URLs into clean analytical paths via transformations.Map.
-// 3. Shards events by Tenant into dedicated partition queues via routing.Partition.
-// 4. Micro-batches events (by count or timeout) via aggregation.Batch for high-throughput batch writes.
-// 5. Merges multi-partition pre-sorted historical partition streams using merging.MergeSort for consistent backfill analytics.
+// Example_dataEngineer demonstrates how to build an ETL data pipeline:
+// 1. Reads line-delimited JSON (JSONL) records using adapters/jsonl.
+// 2. Extracts and standardizes URL paths using transformations.Map.
+// 3. Separates records by customer account (TenantID) using routing.Partition.
+// 4. Groups single records into small batches (by count or timer) using aggregation.Batch before writing.
+// 5. Combines pre-sorted historical log files in order using merging.MergeSort.
 func Example_dataEngineer() {
 	ctx := context.Background()
 
-	// Ingress raw JSONL data stream
+	// Ingress stream of JSON Lines log data
 	jsonlSource := rawClickEventSource()
 
-	// Step 1: Clean and extract normalized path
+	// Step 1: Clean raw records by removing full domain names and keeping only URL paths
 	cleanedCh := make(chan CleanClickEvent, 5)
 	cleanedStream := streaming.NewChanStream(nil, cleanedCh)
 
@@ -60,7 +60,7 @@ func Example_dataEngineer() {
 		}, jsonlSource, cleanedStream)
 	}()
 
-	// Step 2: Route by Tenant using Partition
+	// Step 2: Route records to specific queues based on TenantID
 	tenantA_Ch := make(chan CleanClickEvent, 5)
 	tenantB_Ch := make(chan CleanClickEvent, 5)
 	dlqCh := make(chan CleanClickEvent, 5)
@@ -73,7 +73,7 @@ func Example_dataEngineer() {
 	_ = routing.Partition(ctx,
 		func(ev CleanClickEvent) (string, error) { return ev.TenantID, nil },
 		routes,
-		streaming.NewChanStream(nil, dlqCh),
+		streaming.NewChanStream(nil, dlqCh), // Fallback destination if an unknown tenant ID arrives
 		streaming.NewChanStream(cleanedCh, nil),
 	)
 
@@ -81,7 +81,8 @@ func Example_dataEngineer() {
 	close(tenantB_Ch)
 	close(dlqCh)
 
-	// Step 3: Micro-batch Tenant A records for Lakehouse staging
+	// Step 3: Group individual records into small batches (max 2 items or after 50ms)
+	// This reduces network calls when writing to cloud storage or relational databases.
 	batchedSink := make(chan []CleanClickEvent, 5)
 	go func() {
 		defer close(batchedSink)
@@ -102,7 +103,7 @@ func Example_dataEngineer() {
 
 	fmt.Printf("Tenant A Staged Records:\n%s", stagingSink.String())
 
-	// Step 4: Multi-partition sorted merge (MergeSort) for backfill ordering
+	// Step 4: Merge two pre-sorted streams in timestamp order (lowest timestamp first)
 	p1, p2 := partitionedBackfillStreams()
 
 	sortedSink := make(chan CleanClickEvent, 4)
@@ -132,10 +133,8 @@ func Example_dataEngineer() {
 	// ts=40 [corp_b] s_4
 }
 
-// rawClickEventSource provides a streaming JSONL source emulating continuous log files
-// delivered from Cloud Object Storage (S3/GCS) or CDC message connectors.
-// For Data Engineers and Lakehouse Architects, each line contains unstructured, multi-tenant click events
-// with full URLs requiring parsing, validation, and schema conforming before analytical table ingestion.
+// rawClickEventSource simulates reading log files from cloud object storage (such as AWS S3 or Google Cloud Storage).
+// Each line contains a JSON object representing a user interaction on a website.
 func rawClickEventSource() streaming.Receiver[RawClickEvent] {
 	rawJSONL := `{"tenant_id":"corp_a","session_id":"s_101","url":"https://app.io/home","ts":1001}
 {"tenant_id":"corp_b","session_id":"s_201","url":"https://app.io/checkout","ts":1002}
@@ -145,10 +144,8 @@ func rawClickEventSource() streaming.Receiver[RawClickEvent] {
 	return jsonl.NewJsonlStream[RawClickEvent](reader, nil)
 }
 
-// partitionedBackfillStreams creates two independently ordered historical partition streams
-// representing distinct data shards (e.g., Kafka topic partitions or historical hourly S3 prefixes).
-// For Data Engineers executing backfills or compaction runs, MergeSort merges these pre-sorted partitions
-// into a globally ordered chronological time-series stream in O(N log K) time without loading entire datasets into memory.
+// partitionedBackfillStreams provides two independent streams of log data that are already sorted by time.
+// We use these to demonstrate how MergeSort combines separate log files into a single ordered timeline.
 func partitionedBackfillStreams() (<-chan CleanClickEvent, <-chan CleanClickEvent) {
 	p1 := make(chan CleanClickEvent, 2)
 	p1 <- CleanClickEvent{TenantID: "corp_a", SessionID: "s_1", Timestamp: 10}

@@ -11,7 +11,7 @@ import (
 	"github.com/stephen-mcelhose/go-streaming/operators/pure"
 )
 
-// RawPolar represents an IQ baseband sample converted into polar magnitude and phase.
+// RawPolar represents a complex number converted into polar coordinates (magnitude, phase angle, and power).
 type RawPolar struct {
 	Index     int
 	Magnitude float64
@@ -19,35 +19,34 @@ type RawPolar struct {
 	Power     float64
 }
 
-// PolarSample represents a demodulated complex baseband IQ sample in polar coordinates.
+// PolarSample represents a processed signal sample including the change in phase from the previous sample.
 type PolarSample struct {
 	Index        int
-	Magnitude    float64 // Envelope amplitude |z|
-	PhaseRad     float64 // Phase angle in radians [-pi, pi]
-	InstPower    float64 // Instantaneous power |z|^2
-	DeltaPhaseHz float64 // Discrete frequency discriminator: Delta theta
+	Magnitude    float64 // Signal amplitude |z|
+	PhaseRad     float64 // Phase angle in radians
+	InstPower    float64 // Signal power (|z|^2)
+	DeltaPhaseHz float64 // Change in phase angle compared to the previous sample
 }
 
-// phaseDiscriminatorState tracks prior sample phase for frequency demodulation.
+// phaseDiscriminatorState stores the previous phase value to measure step-by-step changes.
 type phaseDiscriminatorState struct {
 	prevPhase float64
 	hasPrev   bool
 	sample    PolarSample
 }
 
-// Example_mather demonstrates how a Mathematician / DSP (Digital Signal Processing) Engineer
-// processes complex baseband RF/audio IQ streams (complex128):
-// 1. Ingests raw baseband In-phase / Quadrature (IQ) analytic signal samples: z[n] = I[n] + jQ[n].
-// 2. Applies pure.Map without error-tuple overhead to compute polar magnitude & instantaneous power.
-// 3. Implements single-pass FM/PM phase discrimination via pure.Scan to extract instantaneous frequency shifts.
-// 4. Computes total integrated signal energy across the RF burst using mathops.Sum.
+// Example_mather demonstrates how to process a stream of complex numbers:
+// 1. Ingests a stream of complex signal values (z = real + imaginary * i).
+// 2. Uses pure.Map to convert each value to polar form (magnitude, phase, and power) without needing extra error returns.
+// 3. Uses pure.Scan to track changes in phase between consecutive samples.
+// 4. Uses mathops.Sum to calculate the total power across all samples in the stream.
 func Example_mather() {
 	ctx := context.Background()
 
-	// Ingress stream of complex baseband IQ samples
+	// Ingress stream of complex numbers
 	iqCh := iqPulseStream()
 
-	// Step 1: Demodulate IQ samples into Polar Coordinates (Magnitude, Phase, Instantaneous Power)
+	// Step 1: Convert complex numbers to polar form (Magnitude, Phase, and Power)
 	polarCh := make(chan RawPolar, 4)
 	var sampleIdx int
 	_ = pure.Map(ctx, func(z complex128) RawPolar {
@@ -60,13 +59,14 @@ func Example_mather() {
 	}, streaming.NewChanStream(iqCh, nil), streaming.NewChanStream(nil, polarCh))
 	close(polarCh)
 
-	// Step 2: Instantaneous Frequency Demodulation via pure.Scan
-	// Frequency discriminator: Delta theta = unwrap(theta[n] - theta[n-1])
+	// Step 2: Track phase differences between consecutive samples using pure.Scan.
+	// pure.Scan keeps running state from one item to the next.
 	discriminatedCh := make(chan phaseDiscriminatorState, 4)
 	_ = pure.Scan(ctx, phaseDiscriminatorState{}, func(st phaseDiscriminatorState, raw RawPolar) phaseDiscriminatorState {
 		var deltaPhase float64
 		if st.hasPrev {
 			delta := raw.Phase - st.prevPhase
+			// Normalize phase difference so it stays within the range [-pi, +pi]
 			for delta > math.Pi {
 				delta -= 2 * math.Pi
 			}
@@ -89,7 +89,7 @@ func Example_mather() {
 	}, streaming.NewChanStream(polarCh, nil), streaming.NewChanStream(nil, discriminatedCh))
 	close(discriminatedCh)
 
-	// Step 3: Stream consumption & Demodulated Telemetry Output
+	// Step 3: Print each calculated sample and collect power values for summation
 	powerValues := make(chan float64, 4)
 	fmt.Println("Demodulated Baseband Stream:")
 	for state := range discriminatedCh {
@@ -100,7 +100,7 @@ func Example_mather() {
 	}
 	close(powerValues)
 
-	// Step 4: Total Integrated RF Pulse Energy Calculation via mathops.Sum
+	// Step 4: Sum all power values to find total energy across the entire sequence
 	totalEnergySink := make(chan float64, 1)
 	_ = mathops.Sum(ctx, streaming.NewChanStream(powerValues, nil), streaming.NewChanStream(nil, totalEnergySink))
 	close(totalEnergySink)
@@ -117,13 +117,11 @@ func Example_mather() {
 	// Total Integrated Pulse Energy: 39.0 Joules (normalized)
 }
 
-// iqPulseStream generates a stream of complex baseband IQ samples (complex128) representing
-// an analytic radio-frequency (RF) radar or communications burst: z[n] = I[n] + j*Q[n].
-// For Mathematicians and DSP Engineers, this discrete-time sequence models:
-// - Sample 0: Baseline unmodulated carrier (1.0 + 0.0i) -> Magnitude=1.0, Phase=0.0 rad, Power=1.0
-// - Sample 1: Orthogonal quadrature chirp step (0.0 + 2.0i) -> Magnitude=2.0, Phase=+pi/2 rad (+1.57 rad), Power=4.0
-// - Sample 2: Counter-phase excursion (-3.0 + 0.0i) -> Magnitude=3.0, Phase=+pi rad (+3.14 rad), Power=9.0
-// - Sample 3: High-power modulated symbol (3.0 + 4.0i) -> Magnitude=5.0, Phase=arctan(4/3) (+0.93 rad), Power=25.0
+// iqPulseStream returns a four-sample stream of complex numbers (z = real + imaginary * i):
+// - Sample 0: 1.0 + 0.0i -> Magnitude = 1.0, Phase = 0.0 radians
+// - Sample 1: 0.0 + 2.0i -> Magnitude = 2.0, Phase = +1.57 radians (+pi/2)
+// - Sample 2: -3.0 + 0.0i -> Magnitude = 3.0, Phase = +3.14 radians (+pi)
+// - Sample 3: 3.0 + 4.0i -> Magnitude = 5.0, Phase = +0.93 radians
 func iqPulseStream() <-chan complex128 {
 	iqCh := make(chan complex128, 4)
 	samples := []complex128{
