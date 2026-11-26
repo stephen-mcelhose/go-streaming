@@ -423,9 +423,9 @@ func TestMeasurementGraphClassification(t *testing.T) {
 }
 
 // Example_measurementTwoStreamPipeline demonstrates the complete two-stream reactive model:
-// 1. Stream 1 (Producer): Emits incoming domain measurements from field IoT / lab analyzers.
-// 2. Stream 2 (Router & Engine): Dynamically classifies measurements to NodeSelectors in the graph store
-//    and automatically triggers multi-variable StatefulCalculations as soon as their required inputs are satisfied.
+//  1. Stream 1 (Producer): Emits incoming domain measurements from field IoT / lab analyzers.
+//  2. Stream 2 (Router & Engine): Dynamically classifies measurements to NodeSelectors in the graph store
+//     and automatically triggers multi-variable StatefulCalculations as soon as their required inputs are satisfied.
 func Example_measurementTwoStreamPipeline() {
 	ctx := context.Background()
 	store := NewMeasurementGraphStore()
