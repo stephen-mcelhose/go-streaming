@@ -30,6 +30,8 @@ func Interleave[T any](
 	defer cancel()
 
 	queues := make([]*receiverQueue[T], len(receivers))
+	errCh := make(chan error, len(receivers))
+
 	for i, r := range receivers {
 		q := &receiverQueue[T]{
 			items: make(chan T),
@@ -50,7 +52,11 @@ func Interleave[T any](
 			})
 			if !streaming.IsCleanTermination(err) && err != context.Canceled {
 				rq.err = err
-				cancel()
+				select {
+				case errCh <- err:
+					cancel()
+				default:
+				}
 			}
 		}(r, q)
 	}
@@ -60,8 +66,15 @@ func Interleave[T any](
 		var nextActive []*receiverQueue[T]
 		for _, q := range active {
 			select {
+			case <-errCh:
+				return q.err
 			case <-ctx.Done():
-				return ctx.Err()
+				select {
+				case err := <-errCh:
+					return err
+				default:
+					return ctx.Err()
+				}
 			case item, ok := <-q.items:
 				if ok {
 					if err := sender.Send(ctx, item); err != nil {
@@ -78,5 +91,10 @@ func Interleave[T any](
 		active = nextActive
 	}
 
-	return nil
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
+	}
 }
