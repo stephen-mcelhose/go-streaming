@@ -5,56 +5,66 @@ import (
 	"io"
 )
 
-// NoopSender discards all sent items.
+// NoopSender discards all sent items and always returns nil.
 type NoopSender[T any] struct{}
 
+// NewNoopSender creates a NoopSender that discards all outgoing items.
 func NewNoopSender[T any]() *NoopSender[T] {
 	return &NoopSender[T]{}
 }
 
+// Send discards item and returns nil immediately.
 func (s *NoopSender[T]) Send(ctx context.Context, item T) error {
 	return nil
 }
 
-// NoopReceiver emits nothing and terminates cleanly.
+// NoopReceiver emits nothing and terminates cleanly without invoking the handler.
 type NoopReceiver[T any] struct{}
 
+// NewNoopReceiver creates a NoopReceiver that terminates immediately with nil.
 func NewNoopReceiver[T any]() *NoopReceiver[T] {
 	return &NoopReceiver[T]{}
 }
 
+// Receive immediately returns nil without calling handler.
 func (s *NoopReceiver[T]) Receive(ctx context.Context, handler func(ctx context.Context, item T) error) error {
 	return nil
 }
 
-// EOFSender returns io.EOF on send.
+// EOFSender always returns io.EOF on any Send call.
 type EOFSender[T any] struct{}
 
+// NewEOFSender creates an EOFSender.
 func NewEOFSender[T any]() *EOFSender[T] {
 	return &EOFSender[T]{}
 }
 
+// Send always returns io.EOF.
 func (s *EOFSender[T]) Send(ctx context.Context, item T) error {
 	return io.EOF
 }
 
-// EOFReceiver returns io.EOF immediately on receive.
+// EOFReceiver always returns io.EOF immediately on Receive without calling handler.
 type EOFReceiver[T any] struct{}
 
+// NewEOFReceiver creates an EOFReceiver.
 func NewEOFReceiver[T any]() *EOFReceiver[T] {
 	return &EOFReceiver[T]{}
 }
 
+// Receive always returns io.EOF without invoking handler.
 func (s *EOFReceiver[T]) Receive(ctx context.Context, handler func(ctx context.Context, item T) error) error {
 	return io.EOF
 }
 
-// ChanStream adapts Go channels into Stream[T].
+// ChanStream adapts Go channels into a Stream[T].
 type ChanStream[T any] struct {
 	receiver <-chan T
 	sender   chan<- T
 }
 
+// NewChanStream creates a ChanStream wrapping an ingest receiver channel and an egress sender channel.
+// Either channel may be nil if only half-duplex behavior is desired.
 func NewChanStream[T any](receiver <-chan T, sender chan<- T) *ChanStream[T] {
 	return &ChanStream[T]{
 		receiver: receiver,
@@ -62,6 +72,8 @@ func NewChanStream[T any](receiver <-chan T, sender chan<- T) *ChanStream[T] {
 	}
 }
 
+// Receive drains items from the underlying channel, invoking handler for each item
+// until the channel is closed, ctx is canceled, or handler returns an error.
 func (s *ChanStream[T]) Receive(ctx context.Context, handler func(ctx context.Context, item T) error) error {
 	if s.receiver == nil {
 		return nil
@@ -81,6 +93,7 @@ func (s *ChanStream[T]) Receive(ctx context.Context, handler func(ctx context.Co
 	}
 }
 
+// Send pushes item into the underlying channel, selecting on ctx.Done() to prevent blocking leaks.
 func (s *ChanStream[T]) Send(ctx context.Context, item T) error {
 	if s.sender == nil {
 		return nil

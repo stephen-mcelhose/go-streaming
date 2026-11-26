@@ -1,3 +1,4 @@
+// Package httpstream implements HTTP-based streaming adapters including Server-Sent Events (SSE).
 package httpstream
 
 import (
@@ -17,7 +18,7 @@ type SSEStreamer[T any] struct {
 	flusher http.Flusher
 }
 
-// NewSSEStreamer constructs an SSEStreamer.
+// NewSSEStreamer constructs an SSEStreamer. Returns an error if w does not implement http.Flusher.
 func NewSSEStreamer[T any](w http.ResponseWriter) (*SSEStreamer[T], error) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -88,7 +89,7 @@ func (r *SSEReceiver[T]) Receive(ctx context.Context, handler func(ctx context.C
 	return scanner.Err()
 }
 
-// StreamToHTTP streams all items from receiver to the given SSE response writer.
+// StreamToHTTP streams all items from source receiver to the given SSE HTTP response writer.
 func StreamToHTTP[T any](ctx context.Context, w http.ResponseWriter, source streaming.Receiver[T]) error {
 	streamer, err := NewSSEStreamer[T](w)
 	if err != nil {

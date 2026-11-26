@@ -1,3 +1,7 @@
+// Package math provides ergonomic streaming wrappers for pure, infallible mathematical functions.
+//
+// These operators assume pipeline transformations cannot fail; any underlying stream errors
+// encountered will trigger a panic.
 package math
 
 import (
@@ -7,8 +11,8 @@ import (
 	"github.com/stephen-mcelhose/go-streaming/operators/transformations"
 )
 
-// Map wraps transformations.Map for pure infallible functions func(I) O.
-// Panics if any underlying stream error occurs.
+// Map wraps transformations.Map for pure infallible functions func(item I) O.
+// Panics if any underlying stream error occurs (except context.Canceled).
 func Map[I any, O any](
 	ctx context.Context,
 	mapper func(item I) O,
@@ -23,7 +27,8 @@ func Map[I any, O any](
 	}
 }
 
-// MapWithContext wraps transformations.Map with context awareness for pure functions func(ctx, I) O.
+// MapWithContext wraps transformations.Map for pure functions requiring context inspection func(ctx, item I) O.
+// Panics if any underlying stream error occurs (except context.Canceled).
 func MapWithContext[I any, O any](
 	ctx context.Context,
 	mapper func(ctx context.Context, item I) O,
@@ -38,7 +43,8 @@ func MapWithContext[I any, O any](
 	}
 }
 
-// Filter wraps transformations.Filter for pure predicate func(T) bool.
+// Filter wraps transformations.Filter for pure predicate func(item T) bool.
+// Panics if any underlying stream error occurs (except context.Canceled).
 func Filter[T any](
 	ctx context.Context,
 	predicate func(item T) bool,
@@ -53,7 +59,8 @@ func Filter[T any](
 	}
 }
 
-// Reduce wraps transformations.Reduce for pure reducer func(T, T) T.
+// Reduce wraps transformations.Reduce for pure reducer func(acc, item T) T.
+// Panics if any underlying stream error occurs (except context.Canceled).
 func Reduce[T any](
 	ctx context.Context,
 	initial T,

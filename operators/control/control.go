@@ -1,3 +1,4 @@
+// Package control provides flow control, rate limiting, debouncing, and retry operators.
 package control
 
 import (
@@ -9,7 +10,7 @@ import (
 	"github.com/stephen-mcelhose/go-streaming"
 )
 
-// Throttle limits the throughput of items emitted to out to one item per interval.
+// Throttle limits the throughput of items emitted to out to at most one item per interval.
 func Throttle[T any](
 	ctx context.Context,
 	interval time.Duration,
@@ -29,7 +30,7 @@ func Throttle[T any](
 	})
 }
 
-// Debounce emits an item to out only after quietDuration has passed without any newer item arriving.
+// Debounce emits an item to out only after quietDuration has elapsed without any newer item arriving.
 func Debounce[T any](
 	ctx context.Context,
 	quietDuration time.Duration,
@@ -95,7 +96,7 @@ func Debounce[T any](
 	}
 }
 
-// Retry wraps a Sender and retries failed sends up to maxAttempts with exponential/constant delay.
+// RetrySender wraps an underlying Sender and retries failed sends up to maxAttempts with exponential or constant backoff delay.
 type RetrySender[T any] struct {
 	underlying  streaming.Sender[T]
 	maxAttempts int
@@ -103,7 +104,7 @@ type RetrySender[T any] struct {
 	mu          sync.Mutex
 }
 
-// NewRetrySender creates a resilient Sender with retry capabilities.
+// NewRetrySender creates a resilient Sender configured to retry failed Send operations.
 func NewRetrySender[T any](underlying streaming.Sender[T], maxAttempts int, backoff time.Duration) *RetrySender[T] {
 	if maxAttempts <= 0 {
 		maxAttempts = 1
@@ -115,6 +116,7 @@ func NewRetrySender[T any](underlying streaming.Sender[T], maxAttempts int, back
 	}
 }
 
+// Send attempts to deliver item to the underlying Sender, retrying up to maxAttempts on failure.
 func (r *RetrySender[T]) Send(ctx context.Context, item T) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

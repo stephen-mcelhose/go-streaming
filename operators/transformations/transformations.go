@@ -1,3 +1,4 @@
+// Package transformations provides context-aware stream transformation operators.
 package transformations
 
 import (
@@ -7,7 +8,8 @@ import (
 	"github.com/stephen-mcelhose/go-streaming"
 )
 
-// Map transforms items of type I into O using a context and error-aware mapping function.
+// Map transforms items of type I into type O using a context and error-aware mapping function,
+// streaming each mapped output into the out Sender.
 func Map[I any, O any](
 	ctx context.Context,
 	mapper func(ctx context.Context, item I) (O, error),
@@ -23,7 +25,7 @@ func Map[I any, O any](
 	})
 }
 
-// FlatMap transforms items of type I into slices of O and sends each element to out.
+// FlatMap transforms items of type I into slices of O and sends each element individually to out.
 func FlatMap[I any, O any](
 	ctx context.Context,
 	mapper func(ctx context.Context, item I) ([]O, error),
@@ -44,7 +46,7 @@ func FlatMap[I any, O any](
 	})
 }
 
-// Filter passes items that satisfy the predicate to out.
+// Filter passes items that satisfy the predicate function to out, discarding the rest.
 func Filter[T any](
 	ctx context.Context,
 	predicate func(ctx context.Context, item T) (bool, error),
@@ -63,7 +65,7 @@ func Filter[T any](
 	})
 }
 
-// Reduce aggregates items in stream using reducer function and sends final result to out.
+// Reduce aggregates items in stream using reducer function and sends the final accumulated result to out.
 func Reduce[T any](
 	ctx context.Context,
 	initial T,
@@ -91,7 +93,7 @@ func Reduce[T any](
 	return nil
 }
 
-// Batch groups received items into batches of up to maxBatchSize or flushes when maxWait duration elapses.
+// Batch groups received items into slices of up to maxBatchSize or flushes when maxWait duration elapses.
 func Batch[T any](
 	ctx context.Context,
 	maxBatchSize int,

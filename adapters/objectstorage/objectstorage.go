@@ -1,3 +1,4 @@
+// Package objectstorage provides JSON Lines streaming reading and writing against cloud object stores.
 package objectstorage
 
 import (
@@ -8,9 +9,11 @@ import (
 	"github.com/stephen-mcelhose/go-streaming/adapters/jsonl"
 )
 
-// ObjectStorageClient represents a cloud storage provider (e.g., S3, GCS, Azure Blob).
+// ObjectStorageClient represents an abstract cloud storage provider (e.g. S3, GCS, Azure Blob).
 type ObjectStorageClient interface {
+	// OpenReader opens a readable stream for the given bucket and object key.
 	OpenReader(ctx context.Context, bucket, key string) (io.ReadCloser, error)
+	// OpenWriter opens a writable stream for the given bucket and object key.
 	OpenWriter(ctx context.Context, bucket, key string) (io.WriteCloser, error)
 }
 
@@ -30,7 +33,7 @@ func NewJsonlObjectStorageStream[T any](client ObjectStorageClient, bucket, key 
 	}
 }
 
-// Receive reads the object stream from storage as JSONL.
+// Receive reads the object stream from storage as JSONL and dispatches items to handler.
 func (s *JsonlObjectStorageStream[T]) Receive(ctx context.Context, handler func(ctx context.Context, item T) error) error {
 	rc, err := s.client.OpenReader(ctx, s.bucket, s.key)
 	if err != nil {

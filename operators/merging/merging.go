@@ -1,3 +1,4 @@
+// Package merging provides combinators for merging, zipping, and merge-sorting multiple streams.
 package merging
 
 import (
@@ -9,6 +10,7 @@ import (
 )
 
 // Merge combines multiple Receiver[T] inputs concurrently into a single Sender[T].
+// If any receiver returns an error, the operation cancels remaining receivers and returns the error.
 func Merge[T any](
 	ctx context.Context,
 	sender streaming.Sender[T],
@@ -49,7 +51,8 @@ func Merge[T any](
 	return nil
 }
 
-// Zip pairs items 1-to-1 from two receivers and emits the combined result to sender.
+// Zip pairs items 1-to-1 from two receivers and emits the combined result to out.
+// Terminates as soon as either receiver exhausts its input.
 func Zip[A any, B any, O any](
 	ctx context.Context,
 	zipper func(ctx context.Context, a A, b B) (O, error),
@@ -152,7 +155,8 @@ func (h *minHeap[T]) Pop() any {
 	return x
 }
 
-// MergeSort merges sorted partitions into a single sorted stream using cmp comparator.
+// MergeSort merges pre-sorted partitions into a single sorted stream using cmp comparator.
+// The comparator cmp(a, b) should return a negative number if a < b, 0 if a == b, and positive if a > b.
 func MergeSort[T any](
 	ctx context.Context,
 	cmp func(a, b T) int,

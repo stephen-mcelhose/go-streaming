@@ -1,3 +1,4 @@
+// Package routing provides fan-out, round-robin, and key-partitioned stream routing operators.
 package routing
 
 import (
@@ -9,6 +10,7 @@ import (
 )
 
 // Broadcast replicates each received item to every target sender concurrently.
+// If any sender returns an error, the error is collected and returned.
 func Broadcast[T any](
 	ctx context.Context,
 	in streaming.Receiver[T],
@@ -42,7 +44,7 @@ func Broadcast[T any](
 	})
 }
 
-// RoundRobin distributes incoming items cyclically across the target senders.
+// RoundRobin distributes incoming items cyclically across the provided target senders.
 func RoundRobin[T any](
 	ctx context.Context,
 	in streaming.Receiver[T],
@@ -61,6 +63,7 @@ func RoundRobin[T any](
 }
 
 // Partition routes incoming items to keyed senders using a key extractor function.
+// Returns an error if an item resolves to a key without an assigned sender route.
 func Partition[T any, K comparable](
 	ctx context.Context,
 	keyFn func(item T) (K, error),
