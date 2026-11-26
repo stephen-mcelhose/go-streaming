@@ -11,6 +11,14 @@ import (
 	"github.com/stephen-mcelhose/go-streaming/operators/pure"
 )
 
+// RawPolar represents an IQ baseband sample converted into polar magnitude and phase.
+type RawPolar struct {
+	Index     int
+	Magnitude float64
+	Phase     float64
+	Power     float64
+}
+
 // PolarSample represents a demodulated complex baseband IQ sample in polar coordinates.
 type PolarSample struct {
 	Index        int
@@ -36,31 +44,10 @@ type phaseDiscriminatorState struct {
 func Example_mather() {
 	ctx := context.Background()
 
-	// Ingress stream of complex baseband IQ samples representing a frequency-modulated pulse
-	// Sample 0: Carrier base (1.0 + 0.0i) -> phase 0
-	// Sample 1: Chirp up (0.0 + 2.0i)     -> phase +pi/2 (+1.57 rad)
-	// Sample 2: Chirp up (-3.0 + 0.0i)    -> phase +pi (+3.14 rad)
-	// Sample 3: High power burst (3.0 + 4.0i) -> magnitude 5.0, phase +0.93 rad
-	iqCh := make(chan complex128, 4)
-	samples := []complex128{
-		1.0 + 0.0i,
-		0.0 + 2.0i,
-		-3.0 + 0.0i,
-		3.0 + 4.0i,
-	}
-	for _, s := range samples {
-		iqCh <- s
-	}
-	close(iqCh)
+	// Ingress stream of complex baseband IQ samples
+	iqCh := iqPulseStream()
 
 	// Step 1: Demodulate IQ samples into Polar Coordinates (Magnitude, Phase, Instantaneous Power)
-	type RawPolar struct {
-		Index     int
-		Magnitude float64
-		Phase     float64
-		Power     float64
-	}
-
 	polarCh := make(chan RawPolar, 4)
 	var sampleIdx int
 	_ = pure.Map(ctx, func(z complex128) RawPolar {
@@ -80,7 +67,6 @@ func Example_mather() {
 		var deltaPhase float64
 		if st.hasPrev {
 			delta := raw.Phase - st.prevPhase
-			// Phase wrap correction to [-pi, pi]
 			for delta > math.Pi {
 				delta -= 2 * math.Pi
 			}
@@ -129,4 +115,24 @@ func Example_mather() {
 	// Sample 2: |z|=3.00, Phase=3.14 rad, Power=9.0, DeltaPhase=1.57 rad/sample
 	// Sample 3: |z|=5.00, Phase=0.93 rad, Power=25.0, DeltaPhase=-2.21 rad/sample
 	// Total Integrated Pulse Energy: 39.0 Joules (normalized)
+}
+
+// iqPulseStream generates an analytic RF IQ pulse burst (complex128):
+// - Sample 0: Carrier baseline (1.0 + 0.0i) -> |z|=1.0, Phase=0
+// - Sample 1: Chirp phase shift (0.0 + 2.0i) -> |z|=2.0, Phase=+pi/2 (+1.57 rad)
+// - Sample 2: Further phase shift (-3.0 + 0.0i) -> |z|=3.0, Phase=+pi (+3.14 rad)
+// - Sample 3: High power burst (3.0 + 4.0i) -> |z|=5.0, Phase=+0.93 rad
+func iqPulseStream() <-chan complex128 {
+	iqCh := make(chan complex128, 4)
+	samples := []complex128{
+		1.0 + 0.0i,
+		0.0 + 2.0i,
+		-3.0 + 0.0i,
+		3.0 + 4.0i,
+	}
+	for _, s := range samples {
+		iqCh <- s
+	}
+	close(iqCh)
+	return iqCh
 }

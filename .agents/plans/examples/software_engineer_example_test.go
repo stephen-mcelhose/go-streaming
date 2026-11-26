@@ -53,15 +53,8 @@ func (s *simulatedProvisionService) Send(ctx context.Context, job ProvisionJob) 
 func Example_softwareEngineer() {
 	ctx := context.Background()
 
-	// Ingress stream containing 3 distinct scenario commands:
-	// - usr_ok: Standard valid command (succeeds first try)
-	// - usr_transient: Experiences a transient network glitch, succeeds on retry #2
-	// - usr_corrupt: Permanently fails, exhausts retries, routed to DLQ
-	commands := make(chan UserSignupCommand, 3)
-	commands <- UserSignupCommand{UserID: "usr_ok", Email: "alice@acme.com", Tier: "pro"}
-	commands <- UserSignupCommand{UserID: "usr_transient", Email: "bob@acme.com", Tier: "enterprise"}
-	commands <- UserSignupCommand{UserID: "usr_corrupt", Email: "bad@acme.com", Tier: "unknown"}
-	close(commands)
+	// Ingress stream containing scenario commands
+	commands := userSignupCommandStream()
 
 	jobQueue := make(chan ProvisionJob, 3)
 	dlqSink := make(chan ProvisionJob, 3)
@@ -110,4 +103,17 @@ func Example_softwareEngineer() {
 	// [DISPATCH SUCCESS] job_usr_ok (alice@acme.com, tier: pro)
 	// [DISPATCH SUCCESS] job_usr_transient (bob@acme.com, tier: enterprise)
 	// [DLQ ROUTED] job_usr_corrupt (bad@acme.com) routed to DLQ after 3 attempts
+}
+
+// userSignupCommandStream returns a stream representing three distinct real-world execution paths:
+// 1. usr_ok: Valid account signup, succeeds on first dispatch attempt.
+// 2. usr_transient: Experiences temporary connection contention, succeeds on retry #2.
+// 3. usr_corrupt: Invalid configuration, exhausts all 3 retry attempts and routes cleanly to DLQ.
+func userSignupCommandStream() <-chan UserSignupCommand {
+	commands := make(chan UserSignupCommand, 3)
+	commands <- UserSignupCommand{UserID: "usr_ok", Email: "alice@acme.com", Tier: "pro"}
+	commands <- UserSignupCommand{UserID: "usr_transient", Email: "bob@acme.com", Tier: "enterprise"}
+	commands <- UserSignupCommand{UserID: "usr_corrupt", Email: "bad@acme.com", Tier: "unknown"}
+	close(commands)
+	return commands
 }

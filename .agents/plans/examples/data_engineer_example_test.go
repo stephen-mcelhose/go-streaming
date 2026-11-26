@@ -40,13 +40,8 @@ type CleanClickEvent struct {
 func Example_dataEngineer() {
 	ctx := context.Background()
 
-	// Ingress raw JSONL data stream (e.g. from GCS/S3 or Kafka connector)
-	rawJSONL := `{"tenant_id":"corp_a","session_id":"s_101","url":"https://app.io/home","ts":1001}
-{"tenant_id":"corp_b","session_id":"s_201","url":"https://app.io/checkout","ts":1002}
-{"tenant_id":"corp_a","session_id":"s_102","url":"https://app.io/dashboard","ts":1003}
-`
-	reader := strings.NewReader(rawJSONL)
-	jsonlSource := jsonl.NewJsonlStream[RawClickEvent](reader, nil)
+	// Ingress raw JSONL data stream
+	jsonlSource := rawClickEventSource()
 
 	// Step 1: Clean and extract normalized path
 	cleanedCh := make(chan CleanClickEvent, 5)
@@ -108,15 +103,7 @@ func Example_dataEngineer() {
 	fmt.Printf("Tenant A Staged Records:\n%s", stagingSink.String())
 
 	// Step 4: Multi-partition sorted merge (MergeSort) for backfill ordering
-	p1 := make(chan CleanClickEvent, 2)
-	p1 <- CleanClickEvent{TenantID: "corp_a", SessionID: "s_1", Timestamp: 10}
-	p1 <- CleanClickEvent{TenantID: "corp_a", SessionID: "s_3", Timestamp: 30}
-	close(p1)
-
-	p2 := make(chan CleanClickEvent, 2)
-	p2 <- CleanClickEvent{TenantID: "corp_b", SessionID: "s_2", Timestamp: 20}
-	p2 <- CleanClickEvent{TenantID: "corp_b", SessionID: "s_4", Timestamp: 40}
-	close(p2)
+	p1, p2 := partitionedBackfillStreams()
 
 	sortedSink := make(chan CleanClickEvent, 4)
 	go func() {
@@ -143,4 +130,29 @@ func Example_dataEngineer() {
 	// ts=20 [corp_b] s_2
 	// ts=30 [corp_a] s_3
 	// ts=40 [corp_b] s_4
+}
+
+// rawClickEventSource returns a JSONL streaming receiver simulating records ingested from S3/GCS.
+func rawClickEventSource() streaming.Receiver[RawClickEvent] {
+	rawJSONL := `{"tenant_id":"corp_a","session_id":"s_101","url":"https://app.io/home","ts":1001}
+{"tenant_id":"corp_b","session_id":"s_201","url":"https://app.io/checkout","ts":1002}
+{"tenant_id":"corp_a","session_id":"s_102","url":"https://app.io/dashboard","ts":1003}
+`
+	reader := strings.NewReader(rawJSONL)
+	return jsonl.NewJsonlStream[RawClickEvent](reader, nil)
+}
+
+// partitionedBackfillStreams creates pre-sorted historical partition streams from two distinct shards.
+func partitionedBackfillStreams() (<-chan CleanClickEvent, <-chan CleanClickEvent) {
+	p1 := make(chan CleanClickEvent, 2)
+	p1 <- CleanClickEvent{TenantID: "corp_a", SessionID: "s_1", Timestamp: 10}
+	p1 <- CleanClickEvent{TenantID: "corp_a", SessionID: "s_3", Timestamp: 30}
+	close(p1)
+
+	p2 := make(chan CleanClickEvent, 2)
+	p2 <- CleanClickEvent{TenantID: "corp_b", SessionID: "s_2", Timestamp: 20}
+	p2 <- CleanClickEvent{TenantID: "corp_b", SessionID: "s_4", Timestamp: 40}
+	close(p2)
+
+	return p1, p2
 }
