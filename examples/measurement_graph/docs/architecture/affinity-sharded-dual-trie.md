@@ -123,20 +123,18 @@ Storing pointer-heavy tries in managed Go heap memory incurs structural overhead
 | **100 Million** | ~5.5 GB | ~25.5 GB | **~31.0 GB** | **Pointer Tax Threshold**: Tens of millions of heap pointers trigger GC mark-assist thrashing and CPU spikes during mass invalidations. |
 | **1 Billion** | ~55.0 GB | ~255.0 GB | **~310.0 GB** | **System Failure Zone (Single Node)**: Unviable in a single Go process heap; pointer scanning dominates CPU cycles and risks OOM. |
 
-### 5.3 1 Billion Measurements Across Shard Topologies ($M = 16, 48, 128, 256$)
+### 5.3 1 Billion Measurements Across Shard Topologies ($M = 16, 64, 128, 256$)
 
-Evaluating $N = 1,000,000,000$ measurements (~310 GB total footprint, 10 hot primaries, $k = 100\text{M}$ measurements per primary fleet) across different shard counts reveals two distinct physical boundaries:
+Evaluating $N = 1,000,000,000$ measurements (~310 GB total footprint, 10 hot primaries, $k = 100\text{M}$ measurements per primary fleet) across power-of-two shard counts reveals two distinct physical boundaries:
 1. **In-Process Sharding** (1 Go runtime with $M$ mutex shards): Sharding reduces **per-shard lock hold times** during `InvalidatePrefix`, but **does not reduce single-process Go GC pointer pressure** (~310 GB heap).
 2. **Distributed / Multi-Process Sharding** ($M$ isolated worker nodes/processes): Partitioning shards across separate OS processes or containers divides **both** lock hold time and per-process Go heap footprint.
 
 | Shard Count ($M$) | Measurements / Shard ($N / M$) | Memory / Shard (`~310 GB / M`) | Fleet Invalidation Size / Shard ($k_i = 100\text{M} / M$) | Per-Shard Micro-Snip & Rekey Hold Time ($\approx 0.5\ \mu\text{s} / \text{item}$) | Pairwise Collision Prob ($k=8$ workers) | Distributed Node Viability (1 Process / Shard) |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **$M = 16$** | **62.50M** | **~19.38 GB** | 6,250,000 | **~3.12 sec** (Blocks shard ingestion) | $85.6\%$ (High contention) | **Borderline**: ~19.4 GB/node approaches GC mark-assist pressure; 3.1s lock stall on fleet revoke. |
-| **$M = 48$** *(Modulo)* | **20.83M** | **~6.46 GB** | 2,083,333 | **~1.04 sec** (Noticeable pause) | $45.3\%$ (Moderate) | **Viable RAM, High Pause**: ~6.5 GB/node is comfortable for Go GC, but 1s lock hold stalls real-time streams. |
-| **$M = 128$** | **7.81M** | **~2.42 GB** | 781,250 | **~390 ms** (Sub-second spike) | $19.9\%$ (Low contention) | **Healthy**: ~2.4 GB/node runs with minimal GC overhead; sub-400ms fleet invalidation. |
-| **$M = 256$** | **3.91M** | **~1.21 GB** | 390,625 | **~195 ms** (Fast recovery) | $10.4\%$ (Near-linear) | **Optimal**: ~1.2 GB/node is firmly in Go's sweet spot; minimal contention. |
-
-*Note on $M = 48$: Because 48 is not a power of 2, routing must use modulo (`hash % 48`, ~12 CPU cycles) rather than bitwise masking (`hash & (M - 1)`, ~1 CPU cycle), or round up to $M = 64$.*
+| **$M = 16$** | **62.50M** | **~19.38 GB** | 6,250,000 | **~3.12 sec** (Blocks shard ingestion) | $87.9\%$ (High contention) | **Borderline**: ~19.4 GB/node approaches GC mark-assist pressure; 3.1s lock stall on fleet revoke. |
+| **$M = 64$** | **15.63M** | **~4.84 GB** | 1,562,500 | **~781 ms** (Sub-second pause) | $36.6\%$ (Moderate) | **Viable**: ~4.8 GB/node is comfortable for Go GC; sub-second fleet invalidation. |
+| **$M = 128$** | **7.81M** | **~2.42 GB** | 781,250 | **~390 ms** (Fast spike) | $20.0\%$ (Low contention) | **Healthy**: ~2.4 GB/node runs with minimal GC overhead; sub-400ms fleet invalidation. |
+| **$M = 256$** | **3.91M** | **~1.21 GB** | 390,625 | **~195 ms** (Fast recovery) | $10.5\%$ (Near-linear) | **Optimal**: ~1.2 GB/node is firmly in Go's sweet spot; minimal contention. |
 
 #### Key Architectural Takeaways at the 1B Scale:
 - **Why In-Process Sharding Alone Fails at 1B**: Even at $M = 256$ shards, a single Go process holding 1B dual-indexed measurements still has a **310 GB shared heap** with billions of pointers. Go's garbage collector is global to the process and will thrash regardless of mutex count.
