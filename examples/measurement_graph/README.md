@@ -49,6 +49,7 @@ An agent or engineer should explore this documentation in the following order:
 │    ├── docs/artifacts/generic-prefix-trie.md (Layer 1) │
 │    ├── docs/artifacts/trie-graph-store.md    (Layer 2) │
 │    ├── docs/artifacts/dual-index-store.md    (Layer 2.5)│
+│    ├── docs/artifacts/cluster-router.md      (Layer 2.7)│
 │    ├── docs/artifacts/trie-cache.md          (Layer 3) │
 │    └── docs/artifacts/classifier-engine.md   (Layer 4) │
 └──────────────────────────┬─────────────────────────────┘
