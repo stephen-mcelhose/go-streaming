@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/stephen-mcelhose/go-streaming"
+	mathops "github.com/stephen-mcelhose/go-streaming/operators/math"
 )
 
 // ConstraintKind distinguishes exact key-value matches from presence checks.
@@ -125,6 +126,38 @@ func (p PatternSelector) EvaluateCandidate(m StoredObservation) (int, bool) {
 	score += len(m.Labels) + len(m.Secondaries)
 
 	return score, true
+}
+
+// EntityIdentity identifies the physical or logical subject being observed.
+type EntityIdentity struct {
+	BusinessUnit string // e.g. "Agronomy", "Cardiology", "Manufacturing"
+	EntityType   string // e.g. "PLOT", "PATIENT", "MACHINE"
+	EntityID     string // Unique identifier, e.g. "plot_37711542"
+	GroupID      string // Optional cohort or trial group
+}
+
+func (e EntityIdentity) String() string {
+	return fmt.Sprintf("%s:%s:%s", e.BusinessUnit, e.EntityType, e.EntityID)
+}
+
+// StreamingMeasurement represents an observation answering a primary metric question
+// alongside categorical labels, numeric secondary readings, and subject identity.
+type StreamingMeasurement[N mathops.OrderedNumber] struct {
+	Identity    EntityIdentity
+	Primary     KeyValue[string, N]
+	Labels      []KeyValue[string, string]
+	Secondaries []KeyValue[string, N]
+	Timestamp   time.Time
+}
+
+// LabelValue returns the value of a label key on the measurement if present.
+func (m StreamingMeasurement[N]) LabelValue(key string) (string, bool) {
+	for _, l := range m.Labels {
+		if l.Key == key {
+			return l.Value, true
+		}
+	}
+	return "", false
 }
 
 // StoredObservation holds an indexed observation in an entity's working memory.
