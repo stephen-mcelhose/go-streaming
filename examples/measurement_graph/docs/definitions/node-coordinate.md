@@ -62,20 +62,18 @@ BU:EntityType:EntityID:PrimaryCode:ClassID:InstanceID[:Key1=Val1,Key2=Val2...]
 
 ---
 
-## 4. Open Issue: Characteristic Matching Precedence (Exact vs. Presence)
+## 4. Characteristic Matching Precedence (Exact vs. Presence)
 
-### Problem Statement:
-In multi-dimensional classification, an incoming observation may have characteristic labels matching rules at two different levels of specificity:
-- **Exact Matcher**: `Key1=foo` (Closed rule matching an exact value).
-- **Existence / Presence Matcher**: `Key1` (Open wildcard matching the presence of the key regardless of value).
+### Resolved Policy:
+In multi-dimensional classification, an incoming observation may have characteristic labels matching rules at different specificity levels:
+- **Exact (Closed) Matcher**: `Key1=foo` (Closed rule matching an exact value $\to$ +10 points).
+- **Existence / Presence (Open) Matcher**: `Key1` (Open wildcard matching the presence of the key regardless of value $\to$ +1 point).
 
-### Intended Behavior & Precedence:
-When classifying and placing into `NodeCoordinate`:
-1. Both matchers are valid candidates.
-2. The classifier **MUST prefer the exact matcher (`Key1=foo`)** over the wildcard existence matcher (`Key1`) when both match.
-3. If no exact value rule matches, the wildcard presence matcher acts as the fallback.
-
-*Tracking Issue: Recorded for formalization in classifier rule resolution.*
+### Specification & Precedence Rules:
+1. `Classifier.Classify` calculates a quantitative `SpecificityScore(m)` for every matching candidate rule:
+   $$\text{Score} = (\text{count of exact closed matches} \times 10) + (\text{count of open presence matches} \times 1)$$
+2. The candidate with the highest specificity score **MUST** be selected, ensuring closed exact matches take precedence over open wildcards regardless of registration order.
+3. If no exact value rule matches, open presence rules serve as the fallback classifier.
 
 ---
 
