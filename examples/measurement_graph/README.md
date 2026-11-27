@@ -39,7 +39,8 @@ An agent or engineer should explore this documentation in the following order:
 │ 3. System Architecture & Lifecycle                     │
 │    ├── docs/architecture/system-overview.md            │
 │    ├── docs/architecture/two-tier-storage.md           │
-│    └── docs/architecture/striped-concurrency.md        │
+│    ├── docs/architecture/striped-concurrency.md        │
+│    └── docs/architecture/affinity-sharded-dual-trie.md │
 └──────────────────────────┬─────────────────────────────┘
                            │
                            ▼
