@@ -6,7 +6,7 @@ tags:
   - "entrypoint"
   - "measurement-graph"
   - "architecture"
-version: "1.0.0"
+version: "1.1.0"
 status: "Active"
 ---
 
@@ -16,7 +16,7 @@ Welcome to the `examples/measurement_graph` subsystem. This package implements a
 
 ---
 
-## 1. Quick Start: Where to Begin
+## 1. Quick Start: Documentation Reading Order
 
 An agent or engineer should explore this documentation in the following order:
 
@@ -30,13 +30,16 @@ An agent or engineer should explore this documentation in the following order:
 ┌────────────────────────────────────────────────────────┐
 │ 2. Core Concepts & Theory                              │
 │    ├── docs/concepts/inverted-prefix-trie.md           │
-│    └── docs/concepts/rete-slot-resolution.md           │
+│    ├── docs/concepts/rete-slot-resolution.md           │
+│    └── docs/concepts/forward-chaining.md               │
 └──────────────────────────┬─────────────────────────────┘
                            │
                            ▼
 ┌────────────────────────────────────────────────────────┐
 │ 3. System Architecture & Lifecycle                     │
-│    └── docs/architecture/two-tier-storage.md           │
+│    ├── docs/architecture/system-overview.md            │
+│    ├── docs/architecture/two-tier-storage.md           │
+│    └── docs/architecture/striped-concurrency.md        │
 └──────────────────────────┬─────────────────────────────┘
                            │
                            ▼
@@ -51,7 +54,8 @@ An agent or engineer should explore this documentation in the following order:
                            ▼
 ┌────────────────────────────────────────────────────────┐
 │ 5. Formal Definitions & Edge Invariants                │
-│    └── docs/definitions/node-coordinate.md             │
+│    ├── docs/definitions/node-coordinate.md             │
+│    └── docs/definitions/stateful-calculation.md        │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -68,7 +72,7 @@ In multi-variable streaming computations (e.g. computing standardized metrics ac
 ### Our Solution
 1. **Inverted Prefix Trie Working Memory** ([Concept](docs/concepts/inverted-prefix-trie.md)): Coordinates are entity-first (`BU:EntityType:EntityID:...`), localizing working memory and enabling **$O(1)$ sub-microsecond window pruning**.
 2. **Rete Pattern Matching** ([Concept](docs/concepts/rete-slot-resolution.md)): Alpha network evaluates intra-fact labels; Beta network evaluates entity-scoped joins across domain `ClassSelector`s rather than brittle hardware IDs.
-3. **Forward-Chaining Feedback Loop**: Derived calculation outputs are standard facts re-injected into working memory, driving multi-tier formula pipelines synchronously.
+3. **Forward-Chaining Feedback Loop** ([Concept](docs/concepts/forward-chaining.md)): Derived calculation outputs are standard facts re-injected into working memory, driving multi-tier formula pipelines synchronously.
 4. **Two-Tier Storage Caching** ([Architecture](docs/architecture/two-tier-storage.md)): Ultra-fast L1 hot memory backed by persistent L2 graph stores (including native embedded [RelateDB](https://github.com/stephen-mcelhose/relate) via C-FFI).
 5. **Lossless Rekeying & Detached Subtree Invalidation** ([Artifact](docs/artifacts/trie-graph-store.md)): Alternate coordinate projections (e.g. Primary-First for sensor fleets) snip $k$-node subtrees in $O(1)$ and propagate retractions in $O(k \cdot \text{depth})$ without full-table sweeps.
 
@@ -88,8 +92,8 @@ examples/measurement_graph/
 ├── relatedb_test.go           # C-FFI RelateDB integration test suite
 ├── docs/                      # OKF documentation tree
 │   ├── glossary.md            # Lexicographically sorted domain & technical glossary
-│   ├── concepts/              # Theoretical foundations (Tries, Rete)
-│   ├── architecture/          # Multi-tier storage & concurrency design
+│   ├── concepts/              # Theoretical foundations (Tries, Rete, Forward Chaining)
+│   ├── architecture/          # Multi-tier storage, dataflow & concurrency design
 │   ├── artifacts/             # Layered API contract sheets & test mapping
 │   └── definitions/           # Formal domain definitions
 └── storage/                   # Storage engine & data structures
