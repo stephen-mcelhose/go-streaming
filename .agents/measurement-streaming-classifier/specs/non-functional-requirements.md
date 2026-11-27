@@ -12,17 +12,32 @@
 
 ---
 
-## 2. Concurrency & Contention Bounds
+## 2. Concurrency, Contention & Shard Collision Bounds
 
-1. **Disjoint Parallelism ($99.6\%$ Contention-Free Writes):**
-   - With $N = 256$ lock shards, two randomly selected active entities have a collision probability of $\frac{1}{256} \approx 0.39\%$.
-   - Goroutines streaming to distinct entities MUST run in parallel with near-linear core scaling.
-2. **Lock Hold Time:**
-   - Critical section duration under entity/shard write lock MUST NOT exceed $5\ \mu\text{s}$.
+### 2.1 Theoretical Collision Probability Across Worker Scale ($M = 256$ Shards)
+
+For $k$ concurrent worker goroutines writing simultaneously across $M = 256$ lock shards, the probability of at least one lock collision follows the Birthday Problem:
+$$P(\text{Collision}) = 1 - \prod_{i=0}^{k-1} \left(1 - \frac{i}{M}\right) \approx 1 - e^{-\frac{k(k-1)}{2M}}$$
+
+| Concurrent Workers ($k$) | Probability of Zero Collisions | Probability of $\ge 1$ Contention Event | Operational Impact |
+| :--- | :--- | :--- | :--- |
+| **$k = 2$** (Pairwise) | **$99.61\%$** ($\frac{255}{256}$) | **$0.39\%$** | Zero contention between 2 random entities. |
+| **$k = 4$** | **$97.68\%$** | $2.32\%$ | Near-linear parallelism. |
+| **$k = 8$** | **$89.65\%$** | $10.35\%$ | ~1 in 10 chance two workers share a bucket. |
+| **$k = 16$** | **$61.94\%$** | $38.06\%$ | Standard 16-core saturated throughput. |
+| **$k = 19$** | **$49.60\%$** | **$50.40\%$** | **50% threshold** (Birthday Paradox inflection point). |
+| **$k = 32$** | **$13.34\%$** | $86.66\%$ | Saturated core queueing ($< 2.0\ \mu\text{s}$ lock hold). |
+| **$k = 64$** | **$< 0.03\%$** | **$> 99.97\%$** | Collisions occur; avg $\approx 0.25$ workers/shard. |
+
+### 2.2 Concurrency Invariants
+1. **Critical Section Lock Hold Time:**
+   - Critical section duration under entity/shard write lock MUST NOT exceed $5\ \mu\text{s}$ (target: $< 2.0\ \mu\text{s}$).
    - No I/O, network calls, serialization, or unbounded loops inside shard locks.
-3. **Deadlock Freedom (Strict Lock Hierarchy):**
-   - `metaMu` (Root) MUST always be acquired *before* any entity shard lock.
+2. **Deadlock Freedom (Strict Lock Hierarchy):**
+   - Node-level mutexes MUST always be acquired top-down from root to leaf.
    - Dual-index operations MUST acquire entity locks before primary index locks in deterministic order.
+3. **High-Core Shard Scaling:**
+   - For environments with $k \ge 64$ saturated streaming cores, constructors MUST support configuring $M = 1,024$ or $M = 4,096$ shards via `NewGenericPrefixTrieWithShards`.
 
 ---
 
