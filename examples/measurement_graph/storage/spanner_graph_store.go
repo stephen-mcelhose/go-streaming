@@ -58,8 +58,8 @@ func (m *MemorySpannerGraphClient) ExecuteQuery(ctx context.Context, statement s
 
 	upperStmt := strings.ToUpper(statement)
 
-	// 1. Get exact observation: MATCH (obs:Observation {nodeKey: @nodeKey})
-	if strings.Contains(upperStmt, "MATCH (OBS:OBSERVATION {NODEKEY: @NODEKEY})") {
+	// 1. Get exact observation: MATCH (obs:Observation) WHERE obs.node_key = @nodeKey
+	if strings.Contains(upperStmt, "OBS.NODE_KEY = @NODEKEY") {
 		nodeKey, _ := params["nodeKey"].(string)
 		obs, found := m.observations[nodeKey]
 		if !found {
@@ -68,15 +68,15 @@ func (m *MemorySpannerGraphClient) ExecuteQuery(ctx context.Context, statement s
 		return []map[string]any{obs}, nil
 	}
 
-	// 2. GetByClass: MATCH (e:Entity {key: @entityKey})-[:OBSERVED]->(obs:Observation)-[:INSTANCE_OF]->(inst:Instance)-[:MEMBER_OF]->(c:Class {id: @classID})
-	if strings.Contains(upperStmt, "-[:MEMBER_OF]->(C:CLASS {ID: @CLASSID})") {
+	// 2. GetByClass: MATCH (e:Entity)-[r:has_observation]->(obs:Observation), (inst:Instance)-[m:is_member_of]->(c:Class)
+	if strings.Contains(upperStmt, "IS_MEMBER_OF") && strings.Contains(upperStmt, "C.CLASS_ID = @CLASSID") {
 		entityKey, _ := params["entityKey"].(string)
 		classID, _ := params["classID"].(string)
 		var rows []map[string]any
 		for _, edge := range m.edges {
 			if edge.edgeType == "OBSERVED" && edge.src == entityKey {
 				if obs, found := m.observations[edge.dst]; found {
-					if obsClass, _ := obs["classID"].(string); obsClass == classID {
+					if obsClass, _ := obs["class_id"].(string); obsClass == classID {
 						rows = append(rows, obs)
 					}
 				}
@@ -85,8 +85,8 @@ func (m *MemorySpannerGraphClient) ExecuteQuery(ctx context.Context, statement s
 		return rows, nil
 	}
 
-	// 3. GetByEntity: MATCH (e:Entity {key: @entityKey})-[:OBSERVED]->(obs:Observation)
-	if strings.Contains(upperStmt, "MATCH (E:ENTITY {KEY: @ENTITYKEY})-[:OBSERVED]->(OBS:OBSERVATION)") {
+	// 3. GetByEntity: MATCH (e:Entity)-[r:has_observation]->(obs:Observation)
+	if strings.Contains(upperStmt, "HAS_OBSERVATION") && strings.Contains(upperStmt, "E.ENTITY_KEY = @ENTITYKEY") {
 		entityKey, _ := params["entityKey"].(string)
 		var rows []map[string]any
 		for _, edge := range m.edges {
@@ -128,33 +128,53 @@ func (m *MemorySpannerGraphClient) ExecuteMutation(ctx context.Context, statemen
 
 	upperStmt := strings.ToUpper(statement)
 
-	// MERGE / INSERT Node & Observation
-	if strings.Contains(upperStmt, "MERGE") || strings.Contains(upperStmt, "INSERT") {
+	// INSERT / UPDATE Entity
+	if strings.Contains(upperStmt, "INTO ENTITY") {
+		entityKey, _ := params["entityKey"].(string)
+		m.entities[entityKey] = map[string]any{
+			"entity_key":    entityKey,
+			"business_unit": params["bu"],
+			"entity_type":   params["type"],
+			"entity_id":     params["id"],
+		}
+		return 1, nil
+	}
+
+	// INSERT / UPDATE Class
+	if strings.Contains(upperStmt, "INTO CLASS") {
+		classID, _ := params["classID"].(string)
+		m.classes[classID] = map[string]any{"class_id": classID}
+		return 1, nil
+	}
+
+	// INSERT / UPDATE Instance
+	if strings.Contains(upperStmt, "INTO INSTANCE") {
+		instanceID, _ := params["instanceID"].(string)
+		m.instances[instanceID] = map[string]any{"instance_id": instanceID}
+		return 1, nil
+	}
+
+	// INSERT / UPDATE Observation
+	if strings.Contains(upperStmt, "INTO OBSERVATION") {
+		nodeKey, _ := params["nodeKey"].(string)
 		entityKey, _ := params["entityKey"].(string)
 		classID, _ := params["classID"].(string)
 		instanceID, _ := params["instanceID"].(string)
-		nodeKey, _ := params["nodeKey"].(string)
-
-		m.entities[entityKey] = map[string]any{
-			"key":          entityKey,
-			"businessUnit": params["bu"],
-			"entityType":   params["type"],
-			"entityID":     params["id"],
-		}
-		m.classes[classID] = map[string]any{"id": classID}
-		m.instances[instanceID] = map[string]any{"id": instanceID}
 
 		m.observations[nodeKey] = map[string]any{
-			"nodeKey":     nodeKey,
-			"entityKey":   entityKey,
-			"bu":          params["bu"],
-			"type":        params["type"],
-			"id":          params["id"],
-			"primaryCode": params["primaryCode"],
-			"classID":     classID,
-			"instanceID":  instanceID,
-			"value":       params["val"],
-			"timestamp":   params["ts"],
+			"nodeKey":      nodeKey,
+			"node_key":     nodeKey,
+			"entity_key":   entityKey,
+			"primary_code": params["primaryCode"],
+			"primaryCode":  params["primaryCode"],
+			"class_id":     classID,
+			"classID":      classID,
+			"instance_id":  instanceID,
+			"instanceID":   instanceID,
+			"val":          params["val"],
+			"value":        params["val"],
+			"ts":           params["ts"],
+			"timestamp":    params["ts"],
 		}
 
 		m.edges = append(m.edges,
@@ -165,8 +185,8 @@ func (m *MemorySpannerGraphClient) ExecuteMutation(ctx context.Context, statemen
 		return 1, nil
 	}
 
-	// InvalidateEntity: MATCH (e:Entity {key: @entityKey})-[r:OBSERVED]->(obs:Observation) DETACH DELETE obs
-	if strings.Contains(upperStmt, "DETACH DELETE OBS") && strings.Contains(upperStmt, "@ENTITYKEY") {
+	// DELETE FROM Observation WHERE entity_key = @entityKey
+	if strings.Contains(upperStmt, "FROM OBSERVATION") && strings.Contains(upperStmt, "@ENTITYKEY") {
 		entityKey, _ := params["entityKey"].(string)
 		var deleted int64
 		var newEdges []graphEdge
@@ -182,8 +202,8 @@ func (m *MemorySpannerGraphClient) ExecuteMutation(ctx context.Context, statemen
 		return deleted, nil
 	}
 
-	// Fleet Invalidation: MATCH (inst:Instance {id: @instanceID})<-[:INSTANCE_OF]-(obs:Observation) DETACH DELETE obs
-	if strings.Contains(upperStmt, "DETACH DELETE OBS") && strings.Contains(upperStmt, "@INSTANCEID") {
+	// DELETE FROM Observation WHERE instance_id = @instanceID
+	if strings.Contains(upperStmt, "FROM OBSERVATION") && strings.Contains(upperStmt, "@INSTANCEID") {
 		instanceID, _ := params["instanceID"].(string)
 		var deleted int64
 		var newEdges []graphEdge
@@ -199,8 +219,8 @@ func (m *MemorySpannerGraphClient) ExecuteMutation(ctx context.Context, statemen
 		return deleted, nil
 	}
 
-	// Retract single coordinate: MATCH (obs:Observation {nodeKey: @nodeKey}) DETACH DELETE obs
-	if strings.Contains(upperStmt, "DETACH DELETE OBS") && strings.Contains(upperStmt, "@NODEKEY") {
+	// DELETE FROM Observation WHERE node_key = @nodeKey
+	if strings.Contains(upperStmt, "FROM OBSERVATION") && strings.Contains(upperStmt, "@NODEKEY") {
 		nodeKey, _ := params["nodeKey"].(string)
 		if _, found := m.observations[nodeKey]; found {
 			delete(m.observations, nodeKey)
@@ -244,22 +264,28 @@ func NewSpannerGraphStore(client SpannerGraphClient) *SpannerGraphStore {
 }
 
 // Put creates or updates graph nodes and relationships in Spanner Graph.
+// In Cloud Spanner Graph, graph data is inserted into underlying node tables via standard SQL DML
+// (or Spanner Mutations), which is immediately queryable via GQL MATCH statements.
 func (s *SpannerGraphStore) Put(ctx context.Context, m StoredMeasurement) error {
-	gql := `
-GRAPH MeasurementOntology
-MERGE (e:Entity {key: @entityKey})
-SET e.businessUnit = @bu, e.entityType = @type, e.entityID = @id
-MERGE (c:Class {id: @classID})
-MERGE (inst:Instance {id: @instanceID})
-MERGE (inst)-[:MEMBER_OF]->(c)
-MERGE (obs:Observation {nodeKey: @nodeKey})
-SET obs.primaryCode = @primaryCode,
-    obs.classID = @classID,
-    obs.instanceID = @instanceID,
-    obs.value = @val,
-    obs.timestamp = @ts
-MERGE (e)-[:OBSERVED]->(obs)
-MERGE (obs)-[:INSTANCE_OF]->(inst)
+	// 1. Upsert Entity
+	entityDML := `
+INSERT OR UPDATE INTO Entity (entity_key, business_unit, entity_type, entity_id)
+VALUES (@entityKey, @bu, @type, @id)
+`
+	// 2. Upsert Class
+	classDML := `
+INSERT OR UPDATE INTO Class (class_id)
+VALUES (@classID)
+`
+	// 3. Upsert Instance
+	instanceDML := `
+INSERT OR UPDATE INTO Instance (instance_id, class_id)
+VALUES (@instanceID, @classID)
+`
+	// 4. Upsert Observation
+	obsDML := `
+INSERT OR UPDATE INTO Observation (node_key, entity_key, primary_code, class_id, instance_id, val, ts)
+VALUES (@nodeKey, @entityKey, @primaryCode, @classID, @instanceID, @val, @ts)
 `
 	params := map[string]any{
 		"entityKey":   m.Node.Entity.String(),
@@ -274,16 +300,21 @@ MERGE (obs)-[:INSTANCE_OF]->(inst)
 		"ts":          m.Timestamp.UnixMilli(),
 	}
 
-	_, err := s.client.ExecuteMutation(ctx, gql, params)
-	return err
+	for _, dml := range []string{entityDML, classDML, instanceDML, obsDML} {
+		if _, err := s.client.ExecuteMutation(ctx, dml, params); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Get fetches an exact Observation node by NodeCoordinate.
 func (s *SpannerGraphStore) Get(ctx context.Context, node NodeCoordinate) (StoredMeasurement, bool, error) {
 	gql := `
 GRAPH MeasurementOntology
-MATCH (obs:Observation {nodeKey: @nodeKey})
-RETURN obs.nodeKey, obs.bu, obs.type, obs.id, obs.primaryCode, obs.classID, obs.instanceID, obs.value, obs.timestamp
+MATCH (obs:Observation)
+WHERE obs.node_key = @nodeKey
+RETURN obs.node_key AS nodeKey, obs.primary_code AS primaryCode, obs.class_id AS classID, obs.instance_id AS instanceID, obs.val AS value, obs.ts AS timestamp
 `
 	rows, err := s.client.ExecuteQuery(ctx, gql, map[string]any{"nodeKey": node.String()})
 	if err != nil {
@@ -301,8 +332,9 @@ RETURN obs.nodeKey, obs.bu, obs.type, obs.id, obs.primaryCode, obs.classID, obs.
 func (s *SpannerGraphStore) GetByEntity(ctx context.Context, entity EntityIdentity) ([]StoredMeasurement, error) {
 	gql := `
 GRAPH MeasurementOntology
-MATCH (e:Entity {key: @entityKey})-[:OBSERVED]->(obs:Observation)
-RETURN obs.nodeKey, obs.bu, obs.type, obs.id, obs.primaryCode, obs.classID, obs.instanceID, obs.value, obs.timestamp
+MATCH (e:Entity)-[r:has_observation]->(obs:Observation)
+WHERE e.entity_key = @entityKey
+RETURN obs.node_key AS nodeKey, obs.primary_code AS primaryCode, obs.class_id AS classID, obs.instance_id AS instanceID, obs.val AS value, obs.ts AS timestamp
 `
 	rows, err := s.client.ExecuteQuery(ctx, gql, map[string]any{"entityKey": entity.String()})
 	if err != nil {
@@ -320,8 +352,9 @@ RETURN obs.nodeKey, obs.bu, obs.type, obs.id, obs.primaryCode, obs.classID, obs.
 func (s *SpannerGraphStore) GetByClass(ctx context.Context, entity EntityIdentity, classID string) ([]StoredMeasurement, error) {
 	gql := `
 GRAPH MeasurementOntology
-MATCH (e:Entity {key: @entityKey})-[:OBSERVED]->(obs:Observation)-[:INSTANCE_OF]->(inst:Instance)-[:MEMBER_OF]->(c:Class {id: @classID})
-RETURN obs.nodeKey, obs.bu, obs.type, obs.id, obs.primaryCode, obs.classID, obs.instanceID, obs.value, obs.timestamp
+MATCH (e:Entity)-[r:has_observation]->(obs:Observation), (inst:Instance)-[m:is_member_of]->(c:Class)
+WHERE e.entity_key = @entityKey AND c.class_id = @classID AND obs.instance_id = inst.instance_id
+RETURN obs.node_key AS nodeKey, obs.primary_code AS primaryCode, obs.class_id AS classID, obs.instance_id AS instanceID, obs.val AS value, obs.ts AS timestamp
 `
 	params := map[string]any{
 		"entityKey": entity.String(),
@@ -341,33 +374,27 @@ RETURN obs.nodeKey, obs.bu, obs.type, obs.id, obs.primaryCode, obs.classID, obs.
 
 // InvalidateEntity deletes all observation nodes and relationships for an entity.
 func (s *SpannerGraphStore) InvalidateEntity(ctx context.Context, entity EntityIdentity) error {
-	gql := `
-GRAPH MeasurementOntology
-MATCH (e:Entity {key: @entityKey})-[r:OBSERVED]->(obs:Observation)
-DETACH DELETE obs
+	dml := `
+DELETE FROM Observation WHERE entity_key = @entityKey
 `
-	_, err := s.client.ExecuteMutation(ctx, gql, map[string]any{"entityKey": entity.String()})
+	_, err := s.client.ExecuteMutation(ctx, dml, map[string]any{"entityKey": entity.String()})
 	return err
 }
 
 // InvalidateFleet deletes all observation nodes matching a sensor fleet InstanceID across all entities.
 func (s *SpannerGraphStore) InvalidateFleet(ctx context.Context, instanceID string) (int64, error) {
-	gql := `
-GRAPH MeasurementOntology
-MATCH (inst:Instance {id: @instanceID})<-[:INSTANCE_OF]-(obs:Observation)
-DETACH DELETE obs
+	dml := `
+DELETE FROM Observation WHERE instance_id = @instanceID
 `
-	return s.client.ExecuteMutation(ctx, gql, map[string]any{"instanceID": instanceID})
+	return s.client.ExecuteMutation(ctx, dml, map[string]any{"instanceID": instanceID})
 }
 
 // Retract removes a specific Observation node coordinate.
 func (s *SpannerGraphStore) Retract(ctx context.Context, node NodeCoordinate) error {
-	gql := `
-GRAPH MeasurementOntology
-MATCH (obs:Observation {nodeKey: @nodeKey})
-DETACH DELETE obs
+	dml := `
+DELETE FROM Observation WHERE node_key = @nodeKey
 `
-	_, err := s.client.ExecuteMutation(ctx, gql, map[string]any{"nodeKey": node.String()})
+	_, err := s.client.ExecuteMutation(ctx, dml, map[string]any{"nodeKey": node.String()})
 	return err
 }
 
