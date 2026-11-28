@@ -129,28 +129,37 @@ DETACH DELETE obs
 
 ---
 
-## 5. Testing Strategy: Unit Double vs. Live Integration Testing
+## 5. Live Integration Testing (`//go:build spanner`)
 
-### 5.1 Why the Test Double Exists (Unit Spec Gate)
-Real Spanner Graph runs on Google Cloud infrastructure. Testing cloud dependencies directly in standard CI/CD introduces:
-- Network flake and multi-second RPC latency.
-- GCP credential/ADC authentication requirements.
-- Cloud resource provisioning and billing costs.
+`SpannerGraphStore` provides both an in-memory test double and a live client adapter against real Google Cloud Spanner or the Spanner Emulator:
 
-The `SpannerGraphClient` interface abstracts the network transport, allowing `MemorySpannerGraphClient` to validate GQL semantics in nanoseconds under `go test -race` without credentials.
+```
+[ SpannerGraphStore ]
+         │
+         ▼  (SpannerGraphClient Interface)
+ ┌───────────────────────────────────┬───────────────────────────────────┐
+ │ MemorySpannerGraphClient          │ NativeSpannerClient (//go:build spanner)
+ │ (In-memory GQL double, 0 deps)    │ (Live cloud.google.com/go/spanner)
+ └───────────────────────────────────┴───────────────────────────────────┘
+```
 
-### 5.2 Live Integration Testing (`//go:build spanner_integration`)
-For live end-to-end integration testing against real Cloud Spanner or the Google Cloud Spanner Emulator:
+### Running Live Spanner Integration Tests
 
-1. **Spanner Emulator Support**:
-   - The official Google Cloud Spanner emulator can be run locally via Docker:
-     ```bash
-     docker run -d -p 9010:9010 -p 9020:9020 gcr.io/cloud-spanner-emulator/emulator
-     ```
-   - *Note on Spanner Emulator*: As of mid-2024, Cloud Spanner Emulator's support for full `GRAPH` GQL syntax is in preview; full distributed query planner validation requires a live Spanner instance.
-2. **Integration Test Suite Structure**:
-   - Live integration tests are gated behind the `//go:build spanner_integration` build tag (similar to `//go:build relate` for native RelateDB).
-   - They authenticate via Application Default Credentials (ADC) or `SPANNER_EMULATOR_HOST`, provision a test database with `MeasurementOntology` DDL, and run live multi-hop traversals.
+1. Start Spanner Emulator (or target live GCP Spanner):
+   ```bash
+   docker run -d -p 9010:9010 -p 9020:9020 gcr.io/cloud-spanner-emulator/emulator
+   ```
+2. Execute the test suite with `-tags spanner`:
+   ```bash
+   SPANNER_EMULATOR_HOST=localhost:9010 go test -race -v -tags spanner ./examples/measurement_graph/storage -run TestLiveSpannerGraphStore_Integration
+   ```
+3. Verified Behaviors in Live Test:
+   - DDL schema auto-creation (`CREATE PROPERTY GRAPH MeasurementOntology`).
+   - SQL DML upsert into node tables (`INSERT OR UPDATE INTO ...`).
+   - GQL point matching (`MATCH (obs:Observation) WHERE obs.node_key = @nodeKey`).
+   - GQL multi-hop class traversal (`(Entity)-[:has_observation]->(Observation), (Instance)-[:is_member_of]->(Class)`).
+   - Instant entity window expiration (`InvalidateEntity`).
+   - Sensor fleet revocation (`InvalidateFleet`).
 
 ---
 
