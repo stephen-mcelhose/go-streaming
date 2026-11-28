@@ -2,6 +2,7 @@ package measurement_graph
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/stephen-mcelhose/go-streaming"
@@ -18,12 +19,13 @@ type PlacementResult struct {
 
 // Engine orchestrates hierarchical classification, ontology graph storage, and class-based reactive calculation routing.
 type Engine struct {
-	mu              sync.Mutex
-	classifier      *Classifier
-	store           storage.GraphStore
-	calcRouter      *CalculationRouter
-	MaxCascadeDepth int  // Maximum depth for recursive calculation feedback (default: 10)
-	EnableFeedback  bool // Automatically re-ingest calculation outputs to trigger downstream calculations (default: true)
+	mu                sync.Mutex
+	classifier        *Classifier
+	store             storage.GraphStore
+	calcRouter        *CalculationRouter
+	firedCalculations map[string]bool // EntityID:CalculationSignature tracking to prevent re-firing across placements
+	MaxCascadeDepth   int             // Maximum depth for recursive calculation feedback (default: 10)
+	EnableFeedback    bool            // Automatically re-ingest calculation outputs to trigger downstream calculations (default: true)
 }
 
 // NewEngine creates a new measurement graph engine backed by the provided GraphStore.
@@ -32,11 +34,12 @@ func NewEngine(store storage.GraphStore) *Engine {
 		store = storage.NewPrefixTrieGraphStore()
 	}
 	return &Engine{
-		classifier:      NewClassifier(),
-		store:           store,
-		calcRouter:      NewCalculationRouter(),
-		MaxCascadeDepth: 10,
-		EnableFeedback:  true,
+		classifier:        NewClassifier(),
+		store:             store,
+		calcRouter:        NewCalculationRouter(),
+		firedCalculations: make(map[string]bool),
+		MaxCascadeDepth:   10,
+		EnableFeedback:    true,
 	}
 }
 
@@ -88,7 +91,6 @@ func (e *Engine) ClassifyAndPlace(ctx context.Context, m StreamingMeasurement[fl
 		return PlacementResult{}, err
 	}
 
-	firedCalculations := make(map[string]bool)
 	var allTriggered []StreamingMeasurement[float64]
 
 	// Forward-chaining evaluation loop
@@ -98,7 +100,7 @@ func (e *Engine) ClassifyAndPlace(ctx context.Context, m StreamingMeasurement[fl
 			return PlacementResult{}, err
 		}
 
-		newlyTriggered := e.evaluateUnfired(ctx, m.Identity, entityObservations, firedCalculations)
+		newlyTriggered := e.evaluateUnfired(ctx, m.Identity, entityObservations)
 		if len(newlyTriggered) == 0 {
 			break
 		}
@@ -147,41 +149,32 @@ func (e *Engine) evaluateUnfired(
 	ctx context.Context,
 	entity EntityIdentity,
 	observations []StoredMeasurement,
-	firedCalculations map[string]bool,
 ) []StreamingMeasurement[float64] {
 	var triggeredOutputs []StreamingMeasurement[float64]
 
 	for _, calc := range e.calcRouter.calculations {
-		if firedCalculations[calc.CalculationCode] {
+		// Find all valid unified assignment combinations across required slots
+		matches := e.findUnifiedMatches(calc.RequiredSlots, observations, 0, make(map[string]StoredMeasurement), make(map[string]string))
+		if len(matches) == 0 {
 			continue
 		}
 
-		boundInputs := make(map[string]StoredMeasurement, len(calc.RequiredSlots))
-		allSatisfied := true
-
-		for _, slot := range calc.RequiredSlots {
-			var bestCandidate *StoredMeasurement
-
-			for _, obs := range observations {
-				if slot.Matches(obs) {
-					if bestCandidate == nil || obs.Timestamp.After(bestCandidate.Timestamp) {
-						obsCopy := obs
-						bestCandidate = &obsCopy
-					}
+		for _, boundInputs := range matches {
+			// Generate a unique firing signature based on entity and bound input node coordinates
+			signature := entity.String() + "|" + calc.CalculationCode
+			for _, slot := range calc.RequiredSlots {
+				if boundObs, ok := boundInputs[slot.SlotName]; ok {
+					signature += "|" + boundObs.Node.String()
 				}
 			}
 
-			if bestCandidate == nil {
-				allSatisfied = false
-				break
+			if e.firedCalculations[signature] {
+				continue
 			}
-			boundInputs[slot.SlotName] = *bestCandidate
-		}
 
-		if allSatisfied {
 			outMeas, err := calc.Compute(ctx, entity, boundInputs)
 			if err == nil {
-				firedCalculations[calc.CalculationCode] = true
+				e.firedCalculations[signature] = true
 				triggeredOutputs = append(triggeredOutputs, outMeas)
 			}
 		}
@@ -190,10 +183,87 @@ func (e *Engine) evaluateUnfired(
 	return triggeredOutputs
 }
 
+// findUnifiedMatches performs recursive backtracking to find all valid, unified slot bindings
+// across variables declaring ConstraintDynamic (?var or @).
+func (e *Engine) findUnifiedMatches(
+	slots []ClassSelector,
+	observations []StoredMeasurement,
+	slotIdx int,
+	currentBindings map[string]StoredMeasurement,
+	unifiedVars map[string]string,
+) []map[string]StoredMeasurement {
+	if slotIdx >= len(slots) {
+		// Completed a valid binding across all slots
+		result := make(map[string]StoredMeasurement, len(currentBindings))
+		for k, v := range currentBindings {
+			result[k] = v
+		}
+		return []map[string]StoredMeasurement{result}
+	}
+
+	slot := slots[slotIdx]
+	var results []map[string]StoredMeasurement
+
+	// Group candidates that satisfy static match and current dynamic unification bindings
+	for _, obs := range observations {
+		if !slot.StaticMatches(obs) {
+			continue
+		}
+
+		// Check and attempt unification on dynamic constraints
+		constraints := slot.ParsedConstraints()
+		unificationValid := true
+		newVars := make(map[string]string, len(unifiedVars))
+		for k, v := range unifiedVars {
+			newVars[k] = v
+		}
+
+		for _, c := range constraints {
+			if c.Kind == ConstraintDynamic {
+				actualVal, hasVal := obs.Labels[c.Key]
+				if !hasVal {
+					unificationValid = false
+					break
+				}
+
+				if boundVal, alreadyBound := newVars[c.VarName]; alreadyBound {
+					if boundVal != actualVal {
+						unificationValid = false
+						break
+					}
+				} else {
+					newVars[c.VarName] = actualVal
+				}
+			}
+		}
+
+		if !unificationValid {
+			continue
+		}
+
+		// Recurse to next slot with updated bindings
+		currentBindings[slot.SlotName] = obs
+		subMatches := e.findUnifiedMatches(slots, observations, slotIdx+1, currentBindings, newVars)
+		results = append(results, subMatches...)
+		delete(currentBindings, slot.SlotName)
+	}
+
+	return results
+}
+
 // InvalidateEntity prunes the working memory subtree for the given entity.
 func (e *Engine) InvalidateEntity(ctx context.Context, entity EntityIdentity) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
+	// Clear firing history for this entity
+	entityPrefix := entity.String() + "|"
+	for sig := range e.firedCalculations {
+		if strings.HasPrefix(sig, entityPrefix) {
+			delete(e.firedCalculations, sig)
+		}
+	}
+
 	return e.store.InvalidateEntity(ctx, entity)
 }
 
