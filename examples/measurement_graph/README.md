@@ -52,6 +52,7 @@ An agent or engineer should explore this documentation in the following order:
 │    ├── docs/artifacts/dual-index-store.md    (Layer 2.5)│
 │    ├── docs/artifacts/cluster-router.md      (Layer 2.7)│
 │    ├── docs/artifacts/trie-cache.md          (Layer 3) │
+│    ├── docs/artifacts/spanner-graph-store.md (Layer 3.5)│
 │    └── docs/artifacts/classifier-engine.md   (Layer 4) │
 └──────────────────────────┬─────────────────────────────┘
                            │
