@@ -322,6 +322,179 @@ func TestMeasurementGraphClassification(t *testing.T) {
 //  1. Stream 1 (Producer): Emits incoming domain measurements from field IoT / lab analyzers.
 //  2. Stream 2 (Router & Engine): Dynamically classifies measurements into Primary:Class:Instance hierarchy
 //     and triggers multi-variable calculations based on declared ClassSelectors.
+func TestMeasurementClassifier_SpecificityScoring(t *testing.T) {
+	type testCase struct {
+		name string
+
+		// setup
+		rules []mg.InstanceClassifier
+
+		// inputs
+		measurement mg.StreamingMeasurement[float64]
+
+		// expected outputs
+		wantFound      bool
+		wantInstanceID string
+		wantClassID    string
+	}
+
+	testCases := []testCase{
+		{
+			name: "MUST prefer exact key-value match over presence wildcard regardless of rule registration order (Wildcard first)",
+			rules: []mg.InstanceClassifier{
+				{
+					PrimaryCode: "GRAIN_YIELD",
+					ClassID:     "CLASS_GRAIN_YIELD",
+					InstanceID:  "COMBINE_GENERIC_PRESENCE",
+					OpenKeys:    []string{"METHOD"},
+				},
+				{
+					PrimaryCode:  "GRAIN_YIELD",
+					ClassID:      "CLASS_GRAIN_YIELD",
+					InstanceID:   "COMBINE_ROTARY_EXACT",
+					ClosedValues: map[string]string{"METHOD": "Rotary"},
+				},
+			},
+			measurement: mg.StreamingMeasurement[float64]{
+				Identity: mg.EntityIdentity{BusinessUnit: "Agronomy", EntityType: "PLOT", EntityID: "plot_101"},
+				Primary:  mg.KeyValue[string, float64]{Key: "GRAIN_YIELD", Value: 185.4},
+				Labels: []mg.KeyValue[string, string]{
+					{Key: "METHOD", Value: "Rotary"},
+				},
+			},
+			wantFound:      true,
+			wantInstanceID: "COMBINE_ROTARY_EXACT",
+			wantClassID:    "CLASS_GRAIN_YIELD",
+		},
+		{
+			name: "MUST prefer exact key-value match over presence wildcard regardless of rule registration order (Exact first)",
+			rules: []mg.InstanceClassifier{
+				{
+					PrimaryCode:  "GRAIN_YIELD",
+					ClassID:      "CLASS_GRAIN_YIELD",
+					InstanceID:   "COMBINE_ROTARY_EXACT",
+					ClosedValues: map[string]string{"METHOD": "Rotary"},
+				},
+				{
+					PrimaryCode: "GRAIN_YIELD",
+					ClassID:     "CLASS_GRAIN_YIELD",
+					InstanceID:  "COMBINE_GENERIC_PRESENCE",
+					OpenKeys:    []string{"METHOD"},
+				},
+			},
+			measurement: mg.StreamingMeasurement[float64]{
+				Identity: mg.EntityIdentity{BusinessUnit: "Agronomy", EntityType: "PLOT", EntityID: "plot_101"},
+				Primary:  mg.KeyValue[string, float64]{Key: "GRAIN_YIELD", Value: 185.4},
+				Labels: []mg.KeyValue[string, string]{
+					{Key: "METHOD", Value: "Rotary"},
+				},
+			},
+			wantFound:      true,
+			wantInstanceID: "COMBINE_ROTARY_EXACT",
+			wantClassID:    "CLASS_GRAIN_YIELD",
+		},
+		{
+			name: "MUST fall back to presence wildcard when exact value does not match",
+			rules: []mg.InstanceClassifier{
+				{
+					PrimaryCode:  "GRAIN_YIELD",
+					ClassID:      "CLASS_GRAIN_YIELD",
+					InstanceID:   "COMBINE_ROTARY_EXACT",
+					ClosedValues: map[string]string{"METHOD": "Rotary"},
+				},
+				{
+					PrimaryCode: "GRAIN_YIELD",
+					ClassID:     "CLASS_GRAIN_YIELD",
+					InstanceID:  "COMBINE_GENERIC_PRESENCE",
+					OpenKeys:    []string{"METHOD"},
+				},
+			},
+			measurement: mg.StreamingMeasurement[float64]{
+				Identity: mg.EntityIdentity{BusinessUnit: "Agronomy", EntityType: "PLOT", EntityID: "plot_101"},
+				Primary:  mg.KeyValue[string, float64]{Key: "GRAIN_YIELD", Value: 185.4},
+				Labels: []mg.KeyValue[string, string]{
+					{Key: "METHOD", Value: "Conventional"},
+				},
+			},
+			wantFound:      true,
+			wantInstanceID: "COMBINE_GENERIC_PRESENCE",
+			wantClassID:    "CLASS_GRAIN_YIELD",
+		},
+		{
+			name: "MUST rank candidates by total exact match count on multi-label observations",
+			rules: []mg.InstanceClassifier{
+				{
+					PrimaryCode:  "GRAIN_YIELD",
+					ClassID:      "CLASS_GRAIN_YIELD",
+					InstanceID:   "COMBINE_PARTIAL_EXACT",
+					ClosedValues: map[string]string{"TAXA": "Corn"},
+					OpenKeys:     []string{"METHOD"},
+				},
+				{
+					PrimaryCode: "GRAIN_YIELD",
+					ClassID:     "CLASS_GRAIN_YIELD",
+					InstanceID:  "COMBINE_FULL_EXACT",
+					ClosedValues: map[string]string{
+						"TAXA":   "Corn",
+						"METHOD": "Rotary",
+					},
+				},
+			},
+			measurement: mg.StreamingMeasurement[float64]{
+				Identity: mg.EntityIdentity{BusinessUnit: "Agronomy", EntityType: "PLOT", EntityID: "plot_101"},
+				Primary:  mg.KeyValue[string, float64]{Key: "GRAIN_YIELD", Value: 185.4},
+				Labels: []mg.KeyValue[string, string]{
+					{Key: "TAXA", Value: "Corn"},
+					{Key: "METHOD", Value: "Rotary"},
+				},
+			},
+			wantFound:      true,
+			wantInstanceID: "COMBINE_FULL_EXACT",
+			wantClassID:    "CLASS_GRAIN_YIELD",
+		},
+		{
+			name: "MUST return false when no rule matches primary code or required labels",
+			rules: []mg.InstanceClassifier{
+				{
+					PrimaryCode:  "GRAIN_YIELD",
+					ClassID:      "CLASS_GRAIN_YIELD",
+					InstanceID:   "COMBINE_ROTARY_EXACT",
+					ClosedValues: map[string]string{"METHOD": "Rotary"},
+				},
+			},
+			measurement: mg.StreamingMeasurement[float64]{
+				Identity: mg.EntityIdentity{BusinessUnit: "Agronomy", EntityType: "PLOT", EntityID: "plot_101"},
+				Primary:  mg.KeyValue[string, float64]{Key: "MOISTURE", Value: 14.2},
+				Labels: []mg.KeyValue[string, string]{
+					{Key: "METHOD", Value: "Rotary"},
+				},
+			},
+			wantFound:      false,
+			wantInstanceID: "",
+			wantClassID:    "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			classifier := mg.NewClassifier()
+			for _, r := range tc.rules {
+				classifier.RegisterRule(r)
+			}
+
+			coord, found := classifier.Classify(tc.measurement)
+			require.Equal(t, tc.wantFound, found)
+			if tc.wantFound {
+				require.NotNil(t, coord)
+				require.Equal(t, tc.wantInstanceID, coord.InstanceID)
+				require.Equal(t, tc.wantClassID, coord.ClassID)
+			} else {
+				require.Nil(t, coord)
+			}
+		})
+	}
+}
+
 func Example_measurementTwoStreamPipeline() {
 	ctx := context.Background()
 	engine := mg.NewEngine(storage.NewPrefixTrieGraphStore())

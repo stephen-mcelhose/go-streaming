@@ -11,23 +11,34 @@ type InstanceClassifier struct {
 	Characteristics map[string]string // Additional identifying characteristics attached to placed node
 }
 
-// Matches evaluates whether a measurement satisfies this instance selector rule.
-func (rule InstanceClassifier) Matches(m StreamingMeasurement[float64]) bool {
+// SpecificityScore computes a quantitative specificity score for rule candidate ranking.
+// Exact (closed) matches contribute higher weight than open (presence) matches.
+// If the measurement does not match the rule, score is -1 and matched is false.
+func (rule InstanceClassifier) SpecificityScore(m StreamingMeasurement[float64]) (score int, matched bool) {
 	if m.Primary.Key != rule.PrimaryCode {
-		return false
+		return -1, false
 	}
 	for k, expectedVal := range rule.ClosedValues {
 		actualVal, exists := m.LabelValue(k)
 		if !exists || actualVal != expectedVal {
-			return false
+			return -1, false
 		}
 	}
 	for _, k := range rule.OpenKeys {
 		if _, exists := m.LabelValue(k); !exists {
-			return false
+			return -1, false
 		}
 	}
-	return true
+
+	// Exact closed value matches contribute 10 points; open key presence matches contribute 1 point.
+	score = len(rule.ClosedValues)*10 + len(rule.OpenKeys)
+	return score, true
+}
+
+// Matches evaluates whether a measurement satisfies this instance selector rule.
+func (rule InstanceClassifier) Matches(m StreamingMeasurement[float64]) bool {
+	_, matched := rule.SpecificityScore(m)
+	return matched
 }
 
 // Classifier resolves raw streaming measurements into concrete hierarchical NodeCoordinates.
@@ -48,23 +59,35 @@ func (c *Classifier) RegisterRule(rule InstanceClassifier) {
 }
 
 // Classify matches a streaming measurement against registered instance selector rules
-// to produce a resolved NodeCoordinate.
+// to produce a resolved NodeCoordinate. When multiple rules match, the candidate with
+// the highest specificity score (most exact value matches) is deterministically selected.
 func (c *Classifier) Classify(m StreamingMeasurement[float64]) (*NodeCoordinate, bool) {
 	candidates, exists := c.rulesByPrimary[m.Primary.Key]
 	if !exists {
 		return nil, false
 	}
 
-	for _, rule := range candidates {
-		if rule.Matches(m) {
-			return &NodeCoordinate{
-				Entity:          m.Identity,
-				PrimaryCode:     rule.PrimaryCode,
-				ClassID:         rule.ClassID,
-				InstanceID:      rule.InstanceID,
-				Characteristics: rule.Characteristics,
-			}, true
+	var bestRule *InstanceClassifier
+	bestScore := -1
+
+	for i := range candidates {
+		rule := &candidates[i]
+		if score, matched := rule.SpecificityScore(m); matched {
+			if score > bestScore {
+				bestScore = score
+				bestRule = rule
+			}
 		}
+	}
+
+	if bestRule != nil {
+		return &NodeCoordinate{
+			Entity:          m.Identity,
+			PrimaryCode:     bestRule.PrimaryCode,
+			ClassID:         bestRule.ClassID,
+			InstanceID:      bestRule.InstanceID,
+			Characteristics: bestRule.Characteristics,
+		}, true
 	}
 
 	return nil, false
