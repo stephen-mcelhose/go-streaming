@@ -40,7 +40,8 @@ An agent or engineer should explore this documentation in the following order:
 │    ├── docs/architecture/system-overview.md            │
 │    ├── docs/architecture/two-tier-storage.md           │
 │    ├── docs/architecture/striped-concurrency.md        │
-│    └── docs/architecture/affinity-sharded-dual-trie.md │
+│    ├── docs/architecture/affinity-sharded-dual-trie.md │
+│    └── docs/architecture/backing-store-evaluation.md   │
 └──────────────────────────┬─────────────────────────────┘
                            │
                            ▼
@@ -48,6 +49,8 @@ An agent or engineer should explore this documentation in the following order:
 │ 4. Code Artifacts & Specification Sheets               │
 │    ├── docs/artifacts/generic-prefix-trie.md (Layer 1) │
 │    ├── docs/artifacts/trie-graph-store.md    (Layer 2) │
+│    ├── docs/artifacts/dual-index-store.md    (Layer 2.5)│
+│    ├── docs/artifacts/cluster-router.md      (Layer 2.7)│
 │    ├── docs/artifacts/trie-cache.md          (Layer 3) │
 │    └── docs/artifacts/classifier-engine.md   (Layer 4) │
 └──────────────────────────┬─────────────────────────────┘
